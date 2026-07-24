@@ -1587,30 +1587,9 @@
     // 'world' phase message (enterWorldAudio, below) arrives
     audioReady = true;
 
-    // this page is always opened via a redirect/QR scan, so there is no
-    // user gesture anywhere in its load. Try unlocking right away (some
-    // browsers allow it once this origin has enough play history), and
-    // silently unlock on whatever the first real interaction with this tab
-    // turns out to be -- no dedicated "tap for sound" prompt, sound just
-    // comes on as soon as the browser will allow it.
-    unlockSpectatorAudio();
-    ['pointerdown', 'keydown'].forEach(evt => document.addEventListener(evt, unlockSpectatorAudio, { once:true }));
-
-    // admin remote reset -- tells the guest tab to restart the whole
-    // session (intro video, short film, world) from the beginning, same as
-    // pressing "TETAMU BARU" on the kiosk itself. The reset regenerates the
-    // guest's session code, which kills this connection for good -- flagged
-    // here so the close handler below reports it correctly instead of
-    // endlessly "reconnecting" to an ID that will never come back.
+    // declared up here (not just inside the resetBtn wiring further below)
+    // so the conn close/error handlers below can see it too
     let resetRequested = false;
-    const resetBtn = document.getElementById('spectateResetBtn');
-    resetBtn.style.display = 'block';
-    resetBtn.addEventListener('click', () => {
-      if (!spectConn || !spectConn.open) return;
-      resetRequested = true;
-      spectConn.send({ type: 'reset' });
-      showStatus('SESI DITETAPKAN SEMULA — DAPATKAN PAUTAN BAHARU / SESSION RESET — GET A NEW LINK');
-    });
 
     const status = document.getElementById('spectateStatus');
     function showStatus(msg){ status.style.display = 'block'; status.textContent = msg; }
@@ -1681,6 +1660,39 @@
       }
     });
     peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+
+    // ---- everything below is nice-to-have, never load-bearing for the
+    // connection above: wrapped defensively so a failure here (e.g. an
+    // unusual browser rejecting an Audio() call) can never stop the actual
+    // cast from connecting, which is the one thing that must always work ----
+    try {
+      // this page is always opened via a redirect/QR scan, so there is no
+      // user gesture anywhere in its load. Try unlocking right away (some
+      // browsers allow it once this origin has enough play history), and
+      // silently unlock on whatever the first real interaction with this
+      // tab turns out to be -- no dedicated "tap for sound" prompt, sound
+      // just comes on as soon as the browser will allow it.
+      unlockSpectatorAudio();
+      ['pointerdown', 'keydown'].forEach(evt => document.addEventListener(evt, unlockSpectatorAudio, { once:true }));
+    } catch (e) { console.warn('spectator audio unlock failed:', e); }
+
+    try {
+      // admin remote reset -- tells the guest tab to restart the whole
+      // session (intro video, short film, world) from the beginning, same
+      // as pressing "TETAMU BARU" on the kiosk itself. The reset regenerates
+      // the guest's session code, which kills this connection for good --
+      // resetRequested (declared above) flags that for the close/error
+      // handlers so they report it correctly instead of endlessly
+      // "reconnecting" to an ID that will never come back.
+      const resetBtn = document.getElementById('spectateResetBtn');
+      resetBtn.style.display = 'block';
+      resetBtn.addEventListener('click', () => {
+        if (!spectConn || !spectConn.open) return;
+        resetRequested = true;
+        spectConn.send({ type: 'reset' });
+        showStatus('SESI DITETAPKAN SEMULA — DAPATKAN PAUTAN BAHARU / SESSION RESET — GET A NEW LINK');
+      });
+    } catch (e) { console.warn('spectator reset button failed to wire up:', e); }
   }
 
   // Every render frame, ease the camera toward the newest received pose.
