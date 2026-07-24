@@ -201,19 +201,6 @@
     font-size:10px; letter-spacing:1px; color:#6a5c42;
   }
   #adminCast a { color:#8a7a5a; text-decoration:underline; word-break:break-all; }
-  /* guest-facing link to ulasan.html (project detail + visitor reviews) --
-     shown on the start screen and again in-world so it's reachable either
-     before or after the tour */
-  #shareExpLink { margin-top:16px; font-size:11px; letter-spacing:1px; }
-  #shareExpLink a { color:var(--gold-light, #f2d98a); text-decoration:none; border-bottom:1px dotted rgba(242,217,138,0.5); }
-  #shareExpLink a:hover { border-bottom-style:solid; }
-  #reviewLink {
-    display:inline-block; pointer-events:auto; margin-top:8px; padding:8px 16px;
-    border-radius:999px; background:rgba(20,14,6,0.65); color:#f2e2b6;
-    border:1px solid rgba(242,217,138,0.6); font-weight:700;
-    letter-spacing:1px; font-family: Georgia, serif; font-size:12px;
-    text-decoration:none; box-shadow:0 4px 14px rgba(0,0,0,.5);
-  }
   /* spectator-mode status line (only element shown over the mirrored view) */
   #spectateStatus {
     position:fixed; left:0; right:0; bottom:34px; z-index:25; display:none;
@@ -262,7 +249,6 @@
          placeholder="NAMA TETAMU / GUEST NAME">
   <button id="enterBtn">MASUK GALERI / ENTER GALLERY</button>
   <small>Desktop: click to enable mouse-look, then WASD to walk. On a Meta Quest browser, use the ENTER VR button that appears top-right once you're inside.</small>
-  <div id="shareExpLink"><a href="ulasan.html" target="_blank" rel="noopener">💬 BACA / KONGSI ULASAN PENGUNJUNG — READ OR SHARE VISITOR REVIEWS</a></div>
   <div id="adminCast">PAUTAN ADMIN / ADMIN CAST: <a id="sessionLink" href="#" target="_blank" rel="noopener">—</a></div>
 </div>
 
@@ -285,8 +271,6 @@
     <button id="gyro-button">GUNA GYRO / ENABLE GYRO</button>
     <br>
     <button id="restart-button">⟲ TETAMU BARU / NEW GUEST</button>
-    <br>
-    <a id="reviewLink" href="ulasan.html" target="_blank" rel="noopener">💬 ULASAN / REVIEWS</a>
   </div>
 </div>
 
