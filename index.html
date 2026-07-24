@@ -208,21 +208,18 @@
     letter-spacing:2px; color:#f2e2b6; text-shadow:0 2px 8px rgba(0,0,0,.85);
     pointer-events:none;
   }
-  /* persistent "tap for sound" banner on the spectator/cast tab -- this
-     page is always reached via a redirect or QR scan, never a click
-     inside the document itself, so a genuine tap HERE is the only way
-     any browser will ever unlock audio for whoever is watching the cast
-     screen. Stays up (and clickable) until tapped, however far into the
-     visit that happens to be. */
-  #spectateSoundOverlay {
-    position:fixed; left:0; right:0; bottom:0; z-index:40; display:none;
-    align-items:center; justify-content:center;
-    padding:16px 10px; text-align:center; cursor:pointer;
-    font-family: Georgia, serif; font-size:14px; letter-spacing:1.5px;
-    color:#f2e2b6; background:rgba(20,14,6,0.85);
-    border-top:1px solid rgba(242,217,138,0.5);
-    text-shadow:0 2px 8px rgba(0,0,0,.8);
+  /* admin reset button on the spectate/cast tab -- lets whoever is
+     monitoring the guest remotely restart the whole session (intro video,
+     short film, world) without walking over to the kiosk itself */
+  #spectateResetBtn {
+    position:fixed; top:10px; right:10px; z-index:40; display:none;
+    padding:10px 18px; border-radius:999px;
+    background:rgba(20,14,6,0.75); color:#f2e2b6;
+    border:1px solid rgba(242,217,138,0.6); font-weight:700;
+    letter-spacing:1px; font-family: Georgia, serif; font-size:12px;
+    cursor:pointer; box-shadow:0 4px 14px rgba(0,0,0,.5);
   }
+  #spectateResetBtn:active { transform: scale(0.95); }
 </style>
 </head>
 <body>
@@ -278,7 +275,7 @@
 </div>
 
 <div id="spectateStatus"></div>
-<div id="spectateSoundOverlay">🔊 KETIK UNTUK AKTIFKAN BUNYI / TAP TO ENABLE SOUND</div>
+<button id="spectateResetBtn">⟲ MULA SEMULA / RESET SESSION</button>
 
 <div id="flashFade"></div>
 
@@ -380,6 +377,7 @@
   let peerHost = null;             // guest-side Peer instance
   let hostConns = [];              // open DataConnections to spectators
   let hostRetries = 0;             // unavailable-id regeneration attempts
+  let spectConn = null;            // spectator-side: its one open DataConnection to the guest
   let sessionCode = '';            // e.g. "aiman-4827" (empty = not hosting)
   let sessionDigits = String(1000 + Math.floor(Math.random() * 9000));
   let syncTimer = 0;
@@ -1354,6 +1352,12 @@
         // not wait for the next natural phase change
         sendIntroPhase([conn]);
       });
+      // admin-triggered remote reset from the spectate view (see the
+      // spectateResetBtn handler) -- same effect as pressing "TETAMU BARU"
+      // on the kiosk itself, just callable from across the room
+      conn.on('data', d => {
+        if (d && typeof d === 'object' && !Array.isArray(d) && d.type === 'reset') resetWorldForNewGuest();
+      });
       const drop = () => {
         const i = hostConns.indexOf(conn);
         if (i !== -1) hostConns.splice(i, 1);
@@ -1450,7 +1454,7 @@
     const status = document.getElementById('spectateStatus');
 
     // tapping the mirrored view itself also unlocks audio, same as the
-    // persistent spectateSoundOverlay banner (see setupSpectatorMode)
+    // page-wide first-interaction listener (see setupSpectatorMode)
     introScreen.addEventListener('click', unlockSpectatorAudio);
 
     applyIntroPhase = function(phase, epoch){
@@ -1469,8 +1473,8 @@
         video.currentTime = elapsed;
         // this phase message arrives over the network, never from a click
         // in THIS document, so an unmuted play() is reliably refused until
-        // spectateSoundOverlay's tap unlocks it -- fall back to muted so
-        // the video is at least visibly moving in the meantime
+        // unlockSpectatorAudio's first-interaction listener fires -- fall
+        // back to muted so the video is at least visibly moving meanwhile
         video.play().catch(() => {
           video.muted = true;
           video.play().catch(() => {});
@@ -1488,9 +1492,9 @@
         stopShortFilm();
         // the guest is now touring the gallery -- turn on the SAME
         // background music/nobat/wind ambience and station audio they
-        // hear. Silent until spectateSoundOverlay has actually been
-        // tapped (the AudioContext stays suspended until then), but
-        // everything is primed and ready the instant it is.
+        // hear. Silent until the AudioContext has actually been unlocked
+        // (see unlockSpectatorAudio), but everything is primed and ready
+        // the instant it is.
         enterWorldAudio();
       } else {
         // 'idle' -- guest hasn't tapped MASUK yet
@@ -1499,14 +1503,15 @@
     };
   }
 
-  // One-time real user gesture on the cast tab: this page is always
-  // reached via a redirect or QR scan, never a click inside this document
-  // itself, so nothing here ever earns autoplay-with-sound rights on its
-  // own -- see spectateSoundOverlay in setupSpectatorMode, which is the
-  // one thing on this whole page guaranteed to be an actual tap/click.
-  // Primes everything the same way setupStartScreen's MASUK click does for
-  // the guest's own tab: the AudioContext, the intro video, the film's
-  // tracks, and every station's video.
+  // Tries to earn autoplay-with-sound rights on the cast tab. Called once
+  // immediately (works if the browser's media-engagement heuristics already
+  // allow it) and again on the very first real interaction anywhere on the
+  // page (pointerdown/keydown -- no dedicated "tap for sound" prompt), since
+  // this page is always reached via a redirect or QR scan and so never
+  // starts with a gesture of its own. Primes everything the same way
+  // setupStartScreen's MASUK click does for the guest's own tab: the
+  // AudioContext, the intro video, the film's tracks, and every station's
+  // video.
   function unlockSpectatorAudio(){
     if (filmListener && filmListener.context.state === 'suspended') filmListener.context.resume().catch(() => {});
     unlockStationMedia();
@@ -1540,8 +1545,6 @@
       [filmAudio.music, filmAudio.voice].forEach(a => { if (a.paused) a.play().catch(() => {}); });
     }
     if (introPhase === 'world') enterWorldAudio();
-    const overlay = document.getElementById('spectateSoundOverlay');
-    if (overlay) overlay.style.display = 'none';
   }
 
   // ---------- guest spectator sync: spectator side ----------
@@ -1569,13 +1572,29 @@
     audioReady = true;
 
     // this page is always opened via a redirect/QR scan, so there is no
-    // user gesture anywhere in its load -- every browser here will refuse
-    // unmuted autoplay and keep the AudioContext suspended until someone
-    // actually taps. Show a banner that stays up until that real tap
-    // happens, at whatever point in the visit it happens.
-    const soundOverlay = document.getElementById('spectateSoundOverlay');
-    soundOverlay.style.display = 'flex';
-    soundOverlay.addEventListener('click', unlockSpectatorAudio, { once:true });
+    // user gesture anywhere in its load. Try unlocking right away (some
+    // browsers allow it once this origin has enough play history), and
+    // silently unlock on whatever the first real interaction with this tab
+    // turns out to be -- no dedicated "tap for sound" prompt, sound just
+    // comes on as soon as the browser will allow it.
+    unlockSpectatorAudio();
+    ['pointerdown', 'keydown'].forEach(evt => document.addEventListener(evt, unlockSpectatorAudio, { once:true }));
+
+    // admin remote reset -- tells the guest tab to restart the whole
+    // session (intro video, short film, world) from the beginning, same as
+    // pressing "TETAMU BARU" on the kiosk itself. The reset regenerates the
+    // guest's session code, which kills this connection for good -- flagged
+    // here so the close handler below reports it correctly instead of
+    // endlessly "reconnecting" to an ID that will never come back.
+    let resetRequested = false;
+    const resetBtn = document.getElementById('spectateResetBtn');
+    resetBtn.style.display = 'block';
+    resetBtn.addEventListener('click', () => {
+      if (!spectConn || !spectConn.open) return;
+      resetRequested = true;
+      spectConn.send({ type: 'reset' });
+      showStatus('SESI DITETAPKAN SEMULA — DAPATKAN PAUTAN BAHARU / SESSION RESET — GET A NEW LINK');
+    });
 
     const status = document.getElementById('spectateStatus');
     function showStatus(msg){ status.style.display = 'block'; status.textContent = msg; }
@@ -1597,7 +1616,7 @@
     }
     function connectToGuest(){
       const conn = peer.connect(PEER_PREFIX + SPECTATE_ID, { reliable: true, serialization: 'json' });
-      conn.on('open', () => showStatus('MENUNGGU PANDANGAN TETAMU… / WAITING FOR GUEST VIEW…'));
+      conn.on('open', () => { spectConn = conn; showStatus('MENUNGGU PANDANGAN TETAMU… / WAITING FOR GUEST VIEW…'); });
       conn.on('data', d => {
         // control message (intro phase sync) vs. a pose array -- see
         // broadcastIntroPhase/sendIntroPhase on the host side
@@ -1628,8 +1647,16 @@
         }
         if (status.style.display !== 'none') status.style.display = 'none';
       });
-      conn.on('close', () => scheduleRetry('TETAMU TERPUTUS — MENYAMBUNG SEMULA… / GUEST LEFT — RECONNECTING…'));
-      conn.on('error', () => scheduleRetry('SAMBUNGAN GAGAL — MENCUBA LAGI… / CONNECTION FAILED — RETRYING…'));
+      conn.on('close', () => {
+        if (spectConn === conn) spectConn = null;
+        if (resetRequested){ showStatus('SESI DITETAPKAN SEMULA — DAPATKAN PAUTAN BAHARU / SESSION RESET — GET A NEW LINK'); return; }
+        scheduleRetry('TETAMU TERPUTUS — MENYAMBUNG SEMULA… / GUEST LEFT — RECONNECTING…');
+      });
+      conn.on('error', () => {
+        if (spectConn === conn) spectConn = null;
+        if (resetRequested){ showStatus('SESI DITETAPKAN SEMULA — DAPATKAN PAUTAN BAHARU / SESSION RESET — GET A NEW LINK'); return; }
+        scheduleRetry('SAMBUNGAN GAGAL — MENCUBA LAGI… / CONNECTION FAILED — RETRYING…');
+      });
     }
     peer.on('open', connectToGuest);
     peer.on('error', err => {
