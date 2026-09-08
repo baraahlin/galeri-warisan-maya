@@ -3224,7 +3224,18 @@
         scene.add(c);
       }));
     });
+  }
 
+  // ---------- the horizon ring: three GLTFs cloned out to 21 copies between
+  // them, all sitting past the 40 m walk clamp so a guest never gets close
+  // enough to notice the delay -- deferred a beat after the rest of the
+  // scene (see the setTimeout around its call) so their texture/geometry
+  // uploads land AFTER the initial burst of everything else in init()
+  // finishes, instead of piling on top of it. That combined upload spike
+  // -- nine-plus GLTFs decoding at once on page load -- is what was tipping
+  // integrated-GPU laptops into an immediate "Aw, Snap!" crash even after
+  // the merchants_npc texture fix cut the STEADY-STATE memory total ----------
+  function buildHorizonDressing(){
     // forest hillsides as the MID-GROUND layer: one screen of low-poly
     // trees in front of each mountain range, hiding the ranges' photoreal
     // bases behind a softer treeline. All four sit past the 40 m walk
@@ -3322,6 +3333,13 @@
     buildKeretaLembu(13.2, 15, -Math.PI/2);
     buildSawahPadi();
     buildImportedScenery();
+    // the horizon ring is the single biggest GPU upload spike in the whole
+    // load (three GLTFs, ~62MB of decoded texture between them, cloned to
+    // 21 copies) and nothing about it is visible in the first second --
+    // it's all past the walk clamp behind the guest's spawn-facing view.
+    // Pushing it a beat past the initial render lets everything else
+    // finish uploading first instead of all of it landing on the GPU at once.
+    setTimeout(buildHorizonDressing, 800);
   }
 
   // ---------- one bertingkat (stepped pyramidal roof) cluster: the real Istana
