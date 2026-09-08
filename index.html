@@ -461,6 +461,13 @@
   const idleFigures = [];    // { node, phase } figures breathing/swaying subtly
   const npcConvo = [];       // { holder, inner, baseYaw, phase } merchants in conversation
   let firefliesRef = null, motesRef = null;
+  // CONGKAK interactive board: set once the async GLTF + pit layout land in
+  // buildCongkakGame. congkakHoles is the raycast target list (the 14
+  // sowable pits, stores excluded); congkakSow(pitIndex) runs one sow move.
+  let congkakHoles = null;
+  let congkakSow = null;
+  const raycaster = new THREE.Raycaster();
+  const screenCenterNDC = new THREE.Vector2(0, 0);
   let bobPhase = 0;
   const prevPlayerPos = new THREE.Vector3();
   // lazy-built shared assets -- declared up here (before the init() call
@@ -560,6 +567,22 @@
       if (!SPECTATE_ID && !renderer.xr.isPresenting && !isTouchDevice) renderer.domElement.requestPointerLock();
     });
     document.addEventListener('mousemove', onMouseMove);
+
+    // CONGKAK: click/tap while looking at a pit (crosshair = screen centre)
+    // sows it -- same trigger works for a locked mouse-look click and a
+    // mobile tap, so no separate touch handling is needed. VR is left out:
+    // there's no controller-ray wiring for this yet, so it's a no-op there.
+    renderer.domElement.addEventListener('click', () => {
+      if (SPECTATE_ID || renderer.xr.isPresenting || !congkakHoles) return;
+      const st = stationsRef && stationsRef.find(s => s.def.key === 'congkak');
+      if (!st || st.active < 0.5) return;
+      raycaster.setFromCamera(screenCenterNDC, camera);
+      const hits = raycaster.intersectObjects(congkakHoles);
+      if (hits.length){
+        congkakSow(hits[0].object.userData.pitIndex);
+        if (st.sound && st.sound.context.state === 'running') playCongkakClack(st.sound.context, 0.25);
+      }
+    });
 
     if (SPECTATE_ID){
       // spectator: the intro video/canvas element is reused (not stripped)
@@ -1103,6 +1126,22 @@
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + 0.22);
+  }
+
+  // ---------- a short percussive "tok" -- the sound of a handful of
+  // congkak seeds dropping onto a wooden board, played once per sow ----------
+  function playCongkakClack(ctx, volume){
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(220 + Math.random()*60, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 0.09);
+    gain.gain.setValueAtTime(Math.max(volume, 0.001), ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.1);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.12);
   }
 
   // ---------- how far inside the balai's footprint the camera is (1 = inside, 0 = well outside) ----------
@@ -4253,6 +4292,10 @@
         desc:'Malay heritage dishes such as rendang, nasi lemak and an array of kuih-muih reflect centuries of spice trade with India, China and the Middle East, absorbed into local ingredients and cooking methods. They are served at kenduri (feasts), weddings and Hari Raya celebrations, where cooking and sharing food is itself a communal, festive act.' },
       { key:'adat', name:'PANTUN & ADAT', sub:'Adat Resam & Kesusasteraan', color:0x6a4fae, pos:[8,0,5], freq:174, wave:'triangle',
         desc:'Pantun is a traditional oral poetry form built from rhyming quatrains, historically used in courtship, ceremonies and everyday social exchange to convey wit and wisdom indirectly. Adat resam refers to the customary practices and unwritten laws -- such as adat perpatih and adat temenggong -- that have long governed Malay social conduct, ceremonies and inheritance.' },
+      { key:'wayang', name:'WAYANG KULIT', sub:'Teater Bayang-Bayang', color:0xe0a83c, pos:[0,0,5], freq:196, wave:'square',
+        desc:'Wayang Kulit Kelantan is a traditional shadow-puppet theatre: flat, painted leather figures (wayang) are pressed rod-in-hand against a backlit cotton screen (kelir) so the audience on the other side watches only their moving silhouettes. A single puppet master (Tok Dalang) voices every character while cueing a small ensemble of gongs, hand drums (gendang) and the reed serunai, most often performing episodes of the Hikayat Seri Rama -- the Malay retelling of the Ramayana, pitting the hero Seri Rama against the raksasa king Maharaja Wana. Performances traditionally ran through the night at festivals and kenduri, the dalang\'s puppetry, voice work and music passed down master to apprentice.' },
+      { key:'congkak', name:'CONGKAK', sub:'Permainan Tradisional — Lihat & Klik untuk Menyowong', color:0x7a5230, pos:[0,0,-4], silent:true,
+        desc:'Congkak is a traditional mancala-family board game played across the Malay Archipelago on a carved wooden board of two rows of seven small pits (lubang) plus a larger "rumah" (house) at each end. A player scoops every seed or shell out of one pit and sows them one by one into each pit that follows all the way around the board, a rhythm once heard on kampung verandahs during quiet afternoons and rainy-day gatherings alike. Try it yourself: look at a pit and click to sow it.' },
       { key:'filem', name:'FILEM MELAYU', sub:'Zaman Kesultanan Melayu', color:0xc9a227, pos:[0,0,0], silent:true, labelY:2.9,
         desc:'Three Malay films set in the Melaka Sultanate era, arranged left to right in order of release so the story of that world unfolds across the decades: Hang Tuah (1956, dir. Phani Majumdar), Puteri Gunung Ledang (1961, dir. S. Roomai Noor), and Puteri Gunung Ledang (2004, dir. Saw Teong Hin).' },
     ];
@@ -4458,6 +4501,223 @@
     performer.add(frame);
 
     performer.userData.videoEl = video;
+  }
+
+  // ---------- WAYANG KULIT: a backlit shadow-puppet screen (kelir), mounted
+  // in the same gold-framed language as buildVideoPosterCard above. Real
+  // wayang figures are flat, rod-jointed leather cutouts read only as a
+  // moving silhouette against the lit screen behind them anyway -- so
+  // redrawing that silhouette straight onto the screen's own canvas texture
+  // each frame is a closer (and far cheaper) stand-in than modelling and
+  // lighting an extruded 3D puppet would be. Repertoire follows Wayang
+  // Kulit Kelantan's Hikayat Seri Rama: Seri Rama (left, crowned) faces a
+  // raksasa opponent (right, hunched, clawed) ----------
+  function buildWayangScreen(performer, def){
+    const w = 512, h = 300;
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    const tex = new THREE.CanvasTexture(canvas);
+
+    function drawPuppet(x, facing, armAngle, bob){
+      ctx.save();
+      ctx.translate(x, h*0.94 + bob);
+      ctx.scale(0.44*facing, 0.44);
+      ctx.fillStyle = '#100a05';
+      ctx.beginPath(); // legs, lunging stance
+      ctx.moveTo(-16, 0); ctx.lineTo(-5, -78); ctx.lineTo(5, -78); ctx.lineTo(20, 0);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath(); // tapered torso
+      ctx.moveTo(-17, -78); ctx.lineTo(-12, -150); ctx.lineTo(12, -150); ctx.lineTo(17, -78);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, -167, 16, 0, Math.PI*2); ctx.fill(); // head
+      ctx.beginPath(); // crown point
+      ctx.moveTo(-7, -180); ctx.lineTo(0, -212); ctx.lineTo(7, -180);
+      ctx.closePath(); ctx.fill();
+      ctx.save(); // rod-jointed arm, pivoting at the shoulder like a dalang's control rod
+      ctx.translate(13, -138);
+      ctx.rotate(armAngle);
+      ctx.fillRect(0, -4, 50, 8);
+      ctx.beginPath(); ctx.arc(50, 0, 8, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+      ctx.restore();
+    }
+
+    function draw(t){
+      ctx.clearRect(0, 0, w, h);
+      // lamp-lit kelir glow: warm centre fading to a darker cloth edge
+      const grad = ctx.createRadialGradient(w/2, h*0.5, h*0.1, w/2, h*0.5, h*0.95);
+      grad.addColorStop(0, '#f2d98a');
+      grad.addColorStop(0.55, '#c9922e');
+      grad.addColorStop(1, '#4a2f10');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+      const bob = Math.sin(t*2.1)*3;
+      drawPuppet(w*0.33, 1, -0.55 + Math.sin(t*2.1)*0.35, bob);
+      drawPuppet(w*0.7, -1, -0.6 + Math.sin(t*2.1 + Math.PI)*0.4, -bob);
+      tex.needsUpdate = true;
+    }
+    draw(0);
+
+    const backing = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.86, 1.1),
+      new THREE.MeshStandardMaterial({ color: 0x1a1206, roughness: 0.8, side: THREE.DoubleSide })
+    );
+    backing.position.set(0, 0.7, -0.03);
+    performer.add(backing);
+
+    // MeshBasicMaterial (unlit): the screen reads as lamp-lit from behind
+    // regardless of the hall's own lighting, same treatment as the video
+    // screens above
+    const screenMat = new THREE.MeshBasicMaterial({ map: tex, fog: false, toneMapped: false });
+    const screenGeo = new THREE.PlaneGeometry(1.6, 0.9);
+    const screen = new THREE.Mesh(screenGeo, screenMat);
+    screen.position.set(0, 0.7, 0.001);
+    performer.add(screen);
+
+    const backScreen = new THREE.Mesh(screenGeo, screenMat);
+    backScreen.rotation.y = Math.PI;
+    backScreen.position.set(0, 0.7, -0.061);
+    performer.add(backScreen);
+
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0xc9a227, emissive: 0xc9a227, emissiveIntensity: 0.4, roughness: 0.4, metalness: 0.5 });
+    const frame = buildPictureFrame(1.86, 1.1, 1.62, 0.92, 0.04, frameMat);
+    frame.position.set(0, 0.7, -0.01);
+    performer.add(frame);
+
+    performer.userData.wayangDraw = draw;
+  }
+
+  // ---------- CONGKAK: an interactive mancala-family board game, built on
+  // the visitor-supplied Sketchfab scan ("congkak" by bocahgaming287,
+  // CC Attribution). Real congkak alternates two players' turns with
+  // capture rules; this single-visitor exhibit keeps just the core sowing
+  // mechanic -- scoop a pit's seeds and drop them one by one into every pit
+  // that follows, all the way around the board -- so a solo guest can still
+  // feel how the game moves without needing an opponent or a scoreboard.
+  // The board quietly reseeds itself once every small pit runs empty.
+  // Look at a pit (screen-centre crosshair) and click to sow it -- wired up
+  // in init()'s click handler, which raycasts against congkakHoles and
+  // calls congkakSow(pitIndex). ----------
+  function buildCongkakGame(performer, def){
+    if (typeof THREE.GLTFLoader !== 'function') return;
+
+    const TARGET_LEN = 0.62; // real congkak boards run roughly 0.5-0.7 m long
+    const seedMat = new THREE.MeshStandardMaterial({ color: 0xcbb27a, roughness: 0.5, metalness: 0.1 });
+    const seedGeo = new THREE.SphereGeometry(0.011, 8, 6);
+
+    new THREE.GLTFLoader().load('assets/models/congkak.glb', gltf => {
+      const model = gltf.scene;
+      // the source scan's thin edge runs along local Z rather than the
+      // glTF Y-up convention (confirmed from the file's own accessor
+      // bounds: Z spans 3cm, Y spans 14.5cm) -- rotating -90° about X
+      // swaps that thin axis onto world Y so the board lies flat instead
+      // of standing on its edge
+      model.rotation.x = -Math.PI/2;
+      let box = new THREE.Box3().setFromObject(model);
+      let size = box.getSize(new THREE.Vector3());
+      model.scale.setScalar(TARGET_LEN / size.x);
+      // re-measure AFTER rotating+scaling (not before) so the recentring
+      // offset below is computed in the same orientation it'll actually
+      // be viewed in
+      box = new THREE.Box3().setFromObject(model);
+      model.position.sub(box.getCenter(new THREE.Vector3()));
+      model.traverse(o => { if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+
+      // lay out 7+7 small pits plus the 2 end stores proportionally to this
+      // particular scan's own final dimensions, rather than hard-coded
+      // coordinates -- keeps it correct even if the source file is ever
+      // swapped for a different congkak scan. Measured here, one last time,
+      // while model is still parentless: Box3 reads matrixWorld, and with
+      // no parent that's exactly model's own local transform, the same
+      // frame the pit groups below will share once added as its siblings
+      const finalBox = new THREE.Box3().setFromObject(model);
+      const len = finalBox.max.x - finalBox.min.x;
+      const wid = finalBox.max.z - finalBox.min.z;
+      const topY = finalBox.max.y + 0.006;
+      const cz = (finalBox.min.z + finalBox.max.z) / 2;
+      const storeInset = len * 0.09;
+      const rowStartX = finalBox.min.x + storeInset + len*0.05;
+      const rowEndX   = finalBox.max.x - storeInset - len*0.05;
+      const rowOffsetZ = wid * 0.26;
+
+      const holder = new THREE.Group();
+      holder.add(model);
+      holder.position.set(0, 0.05, 0);
+      performer.add(holder);
+
+      // cyclic order matches how seeds are actually sown around a real
+      // board: along one row, into that end's store, back along the far
+      // row, into the other store, and around again
+      const pits = [];
+      for (let i=0;i<7;i++) pits.push({ x: THREE.MathUtils.lerp(rowStartX, rowEndX, i/6), z: cz + rowOffsetZ, store:false });
+      pits.push({ x: finalBox.max.x - storeInset, z: cz, store:true });
+      for (let i=0;i<7;i++) pits.push({ x: THREE.MathUtils.lerp(rowEndX, rowStartX, i/6), z: cz - rowOffsetZ, store:false });
+      pits.push({ x: finalBox.min.x + storeInset, z: cz, store:true });
+
+      const seeds = pits.map(p => p.store ? 0 : 7);
+      const holeGroups = pits.map(p => {
+        const g = new THREE.Group();
+        g.position.set(p.x, topY, p.z);
+        holder.add(g);
+        return g;
+      });
+
+      // transparent (opacity:0, not visible:false -- an invisible object is
+      // skipped by the raycaster entirely) hitboxes over just the 14
+      // sowable pits; a real player never scoops directly from their own
+      // store, so the 2 stores are left out of congkakHoles
+      const holeMeshes = [];
+      pits.forEach((p, i) => {
+        if (p.store) return;
+        const hit = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.028, 0.028, 0.05, 10),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 })
+        );
+        hit.position.copy(holeGroups[i].position);
+        hit.userData.pitIndex = i;
+        holder.add(hit);
+        holeMeshes.push(hit);
+      });
+
+      function renderPit(i){
+        const g = holeGroups[i];
+        while (g.children.length) g.remove(g.children[0]);
+        // a small spiral so a growing pile still reads as individual seeds
+        // instead of overlapping into a single blob
+        for (let k=0;k<seeds[i];k++){
+          const a = k * 2.4;
+          const r = 0.006 + Math.sqrt(k) * 0.006;
+          const s = new THREE.Mesh(seedGeo, seedMat);
+          s.position.set(Math.cos(a)*r, 0.006 + k*0.0007, Math.sin(a)*r);
+          g.add(s);
+        }
+      }
+      pits.forEach((_, i) => renderPit(i));
+
+      function sow(startIdx){
+        let hand = seeds[startIdx];
+        if (!hand) return; // an empty pit has nothing to scoop
+        seeds[startIdx] = 0;
+        renderPit(startIdx);
+        let i = startIdx;
+        while (hand > 0){
+          i = (i + 1) % pits.length;
+          seeds[i]++;
+          renderPit(i);
+          hand--;
+        }
+        // once every small pit is empty, quietly reseed for the next
+        // visitor rather than leaving a dead board behind
+        if (pits.every((p, idx) => p.store || seeds[idx] === 0)){
+          pits.forEach((p, idx) => { seeds[idx] = p.store ? 0 : 7; renderPit(idx); });
+        }
+      }
+
+      congkakHoles = holeMeshes;
+      congkakSow = sow;
+      def.desc += ' — Model 3D: "congkak" oleh bocahgaming287 di Sketchfab (CC Attribution).';
+    }, undefined, () => {});
   }
 
   // ---------- a real still photo mounted in the same gold picture-frame
@@ -4834,6 +5094,10 @@
     } else if (def.key === 'adat'){
       // 0.57s crops a dead intro cut off the front of the clip
       buildVideoPosterCard(performer, def, 'assets/videos/pantun_budi.mp4', 0.57);
+    } else if (def.key === 'wayang'){
+      buildWayangScreen(performer, def);
+    } else if (def.key === 'congkak'){
+      buildCongkakGame(performer, def);
     } else if (def.key === 'filem'){
       const cinema = buildFilemMelayu();
       performer.add(cinema);
@@ -5639,6 +5903,14 @@
         } else if (st.def.key === 'kraf'){
           st.performer.rotation.z = Math.sin(t*1.2)*0.08;
           st.performer.rotation.y = t*0.3;
+        } else if (st.def.key === 'wayang'){
+          // redraw (and reupload) the puppet canvas only while a visitor is
+          // actually near -- same proximity gating the video stations use,
+          // so an idle wayang screen isn't re-uploading its texture every
+          // frame for no one to see
+          if (st.performer.userData.wayangDraw && st.active > 0.05){
+            st.performer.userData.wayangDraw(t);
+          }
         }
       }
 
