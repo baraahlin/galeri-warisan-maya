@@ -4303,37 +4303,66 @@
     m.position.set(pos[0],pos[1],pos[2]); parent.add(m); return m;
   }
 
-  function buildFigure(color){
+  function buildFigure(color, opts={}){
     const g = new THREE.Group();
     const mat = new THREE.MeshStandardMaterial({color,roughness:0.58,metalness:0.08});
-    const skin = new THREE.MeshStandardMaterial({color:0xc98f68,roughness:0.75});
-    addBoxPart(g,[0.34,0.62,0.20],[0,1.10,0],mat);
+    const accent = new THREE.MeshStandardMaterial({color:opts.accent || 0xd6aa39,roughness:0.52,metalness:0.22});
+    const dark = new THREE.MeshStandardMaterial({color:0x17120d,roughness:0.72});
+    const skin = new THREE.MeshStandardMaterial({color:opts.skin || 0xc98f68,roughness:0.75});
+
+    // tapered torso reads more like clothing than the original blocky robot
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.24,0.62,10),mat);
+    torso.position.y=1.10; g.add(torso);
+    const samping = new THREE.Mesh(new THREE.CylinderGeometry(0.235,0.27,0.30,10),accent);
+    samping.position.y=0.82; g.add(samping);
+
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.16,12,10),skin);
     head.position.y=1.57; g.add(head);
+    if(opts.songkok){
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.14,0.13,10),dark);
+      cap.position.y=1.72; g.add(cap);
+    } else {
+      const headpiece = new THREE.Mesh(new THREE.TorusGeometry(0.13,0.025,6,14),accent);
+      headpiece.rotation.x=Math.PI/2; headpiece.position.y=1.69; g.add(headpiece);
+    }
+
     const mkLimb=(x,y,len)=>{
       const pivot=new THREE.Group(); pivot.position.set(x,y,0); g.add(pivot);
-      addBoxPart(pivot,[0.11,len,0.11],[0,-len/2,0],mat);
-      return pivot;
+      const limb=new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.055,len,8),mat);
+      limb.position.y=-len/2; pivot.add(limb); return pivot;
     };
-    const leftArm=mkLimb(-0.24,1.34,0.55), rightArm=mkLimb(0.24,1.34,0.55);
-    const leftLeg=mkLimb(-0.11,0.80,0.72), rightLeg=mkLimb(0.11,0.80,0.72);
+    const leftArm=mkLimb(-0.22,1.34,0.56), rightArm=mkLimb(0.22,1.34,0.56);
+    const leftLeg=mkLimb(-0.10,0.72,0.66), rightLeg=mkLimb(0.10,0.72,0.66);
     return {group:g,leftArm,rightArm,leftLeg,rightLeg,head};
   }
 
   function buildDanceDemo(parent){
-    const a=buildFigure(0xd4a017), b=buildFigure(0x2a9d8f);
-    a.group.position.x=-0.42; b.group.position.x=0.42;
-    b.group.rotation.y=Math.PI;
+    const a=buildFigure(0x8f2f4d,{accent:0xe4b64b}), b=buildFigure(0x176b68,{accent:0xf0c75e});
+    a.group.position.x=-0.46; b.group.position.x=0.46;
+    a.group.rotation.y=-0.10; b.group.rotation.y=0.10;
     parent.add(a.group,b.group);
-    parent.userData.demo={type:'dance',a,b};
+
+    // Wau-inspired crescent backdrop: a recognizable cultural silhouette
+    // behind the dancers without loading another model or texture.
+    const haloMat=new THREE.MeshStandardMaterial({color:0xd6aa39,emissive:0x7a5210,emissiveIntensity:0.35,roughness:0.45,side:THREE.DoubleSide});
+    const crescent=new THREE.Mesh(new THREE.TorusGeometry(0.78,0.055,8,36,Math.PI*1.35),haloMat);
+    crescent.position.set(0,1.05,-0.28); crescent.rotation.z=0.50; parent.add(crescent);
+    parent.userData.demo={type:'dance',a,b,crescent};
   }
 
   function buildSilatDemo(parent){
-    const a=buildFigure(0xa1273d), b=buildFigure(0x2b405f);
-    a.group.position.x=-0.52; b.group.position.x=0.52;
+    const a=buildFigure(0x191919,{accent:0x8f2639,songkok:true}), b=buildFigure(0x27364c,{accent:0xb58b32,songkok:true});
+    a.group.position.x=-0.56; b.group.position.x=0.56;
     a.group.rotation.y=Math.PI/2; b.group.rotation.y=-Math.PI/2;
     parent.add(a.group,b.group);
-    parent.userData.demo={type:'silat',a,b};
+
+    // low gelanggang boundary makes the exchange read as a performance space
+    const gelanggang=new THREE.Mesh(
+      new THREE.RingGeometry(0.72,0.78,32),
+      new THREE.MeshStandardMaterial({color:0xa1273d,emissive:0x53101e,emissiveIntensity:0.45,roughness:0.6,side:THREE.DoubleSide})
+    );
+    gelanggang.rotation.x=-Math.PI/2; gelanggang.position.y=-0.86; parent.add(gelanggang);
+    parent.userData.demo={type:'silat',a,b,gelanggang};
   }
 
   function buildTextileWorkshop(parent){
@@ -4347,41 +4376,63 @@
     addBoxPart(loom,[1.04,0.08,0.08],[0,0.24,0],wood);
     const cloth=addBoxPart(loom,[0.88,0.86,0.025],[0,0.86,0],indigo);
     for(let y=-0.30;y<=0.30;y+=0.15) addBoxPart(cloth,[0.86,0.025,0.035],[0,y,0.02],gold);
+    // vertical warp threads + moving shuttle make the weaving action clear
+    for(let x=-0.38;x<=0.38;x+=0.095) addBoxPart(cloth,[0.012,0.82,0.032],[x,0,0.018],new THREE.MeshStandardMaterial({color:0xeadb9a,roughness:0.65}));
     const shuttle=addBoxPart(loom,[0.28,0.06,0.10],[0,0.55,0.08],gold);
 
     const batik=new THREE.Group(); batik.position.x=0.65; parent.add(batik);
     addBoxPart(batik,[1.0,0.08,0.72],[0,0.55,0],wood);
     addBoxPart(batik,[0.90,0.035,0.62],[0,0.61,0],new THREE.MeshStandardMaterial({color:0xe7d8a8,roughness:0.86}));
+    const motifs=[];
     for(let i=0;i<10;i++){
       const motif=new THREE.Mesh(new THREE.TorusGeometry(0.055,0.012,6,12),wax);
-      motif.rotation.x=Math.PI/2; motif.position.set(-0.34+(i%5)*0.17,0.635,-0.18+Math.floor(i/5)*0.28); batik.add(motif);
+      motif.rotation.x=Math.PI/2; motif.position.set(-0.34+(i%5)*0.17,0.635,-0.18+Math.floor(i/5)*0.28); batik.add(motif); motifs.push(motif);
     }
     const canting=new THREE.Group(); canting.position.set(0,0.82,0); batik.add(canting);
     const handle=addBoxPart(canting,[0.07,0.32,0.07],[0,0.12,0],wood); handle.rotation.z=-0.55;
     const cup=new THREE.Mesh(new THREE.SphereGeometry(0.07,10,8),gold); cup.position.set(0.09,0.0,0); canting.add(cup);
-    parent.userData.demo={type:'textile',shuttle,canting};
+    parent.userData.demo={type:'textile',shuttle,canting,motifs};
   }
 
   function buildKuihDemo(parent){
     const wood=new THREE.MeshStandardMaterial({color:0x5a351e,roughness:0.82});
+    const leaf=new THREE.MeshStandardMaterial({color:0x315f36,roughness:0.9});
     const trayMat=new THREE.MeshStandardMaterial({color:0xb88746,roughness:0.75});
-    const tray=new THREE.Mesh(new THREE.CylinderGeometry(0.72,0.72,0.07,24),trayMat);
-    tray.position.y=0.55; parent.add(tray);
-    const colours=[0xe77d8a,0x6ebf78,0xf2d36b,0x9b73c8,0xf0a45d,0x65a9c7];
+    const tray=new THREE.Mesh(new THREE.CylinderGeometry(0.78,0.78,0.07,24),trayMat);
+    tray.position.y=0.50; parent.add(tray);
+    const leafMat=new THREE.Mesh(new THREE.CylinderGeometry(0.70,0.70,0.018,24),leaf);
+    leafMat.position.y=0.545; parent.add(leafMat);
+
     const balls=[];
-    for(let i=0;i<12;i++){
-      const m=new THREE.Mesh(new THREE.SphereGeometry(0.105,12,9),new THREE.MeshStandardMaterial({color:colours[i%colours.length],roughness:0.72}));
-      const a=i/12*Math.PI*2,r=i<6?0.28:0.50;
-      m.position.set(Math.cos(a)*r,0.66,Math.sin(a)*r); parent.add(m); balls.push(m);
+    // onde-onde cluster
+    for(let i=0;i<7;i++){
+      const m=new THREE.Mesh(new THREE.SphereGeometry(0.105,12,9),new THREE.MeshStandardMaterial({color:0x6ebf78,roughness:0.78}));
+      const a=i/7*Math.PI*2,r=i===0?0:0.26;
+      m.position.set(-0.20+Math.cos(a)*r*0.55,0.67,-0.06+Math.sin(a)*r*0.75); parent.add(m); balls.push(m);
     }
-    const roller=new THREE.Group(); roller.position.set(0,1.0,0); parent.add(roller);
-    const pin=new THREE.Mesh(new THREE.CylinderGeometry(0.075,0.075,0.78,14),wood); pin.rotation.z=Math.PI/2; roller.add(pin);
+    // seri muka cubes, visibly layered
+    for(let i=0;i<3;i++){
+      const base=addBoxPart(parent,[0.22,0.09,0.22],[0.28+(i-1)*0.23,0.62,0.14],new THREE.MeshStandardMaterial({color:0xede2cf,roughness:0.8}));
+      const top=addBoxPart(parent,[0.22,0.075,0.22],[0.28+(i-1)*0.23,0.70,0.14],new THREE.MeshStandardMaterial({color:0x72a85a,roughness:0.75}));
+      balls.push(base,top);
+    }
+    // colourful kuih lapis stack
+    [0xe77d8a,0xf2d36b,0x9b73c8,0xf4eee1].forEach((c,i)=>{
+      const layer=addBoxPart(parent,[0.42,0.055,0.20],[0.18,0.60+i*0.055,-0.28],new THREE.MeshStandardMaterial({color:c,roughness:0.74}));
+      balls.push(layer);
+    });
+
+    const roller=new THREE.Group(); roller.position.set(-0.1,1.03,0); parent.add(roller);
+    const pin=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,0.72,14),wood); pin.rotation.z=Math.PI/2; roller.add(pin);
+    const dough=new THREE.Mesh(new THREE.CylinderGeometry(0.30,0.30,0.035,20),new THREE.MeshStandardMaterial({color:0xf0d9a6,roughness:0.86}));
+    dough.rotation.x=Math.PI/2; dough.position.set(-0.12,0.82,0); parent.add(dough);
+
     const steam=[];
     for(let i=0;i<5;i++){
-      const p=new THREE.Mesh(new THREE.SphereGeometry(0.07,8,6),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.22,depthWrite:false}));
-      p.position.set(-0.28+i*0.14,0.82+(i%2)*0.1,0.02); parent.add(p); steam.push(p);
+      const p=new THREE.Mesh(new THREE.SphereGeometry(0.07,8,6),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.20,depthWrite:false}));
+      p.position.set(-0.32+i*0.16,0.80+(i%2)*0.1,0.02); parent.add(p); steam.push(p);
     }
-    parent.userData.demo={type:'food',roller,balls,steam};
+    parent.userData.demo={type:'food',roller,balls,steam,dough};
   }
 
   function buildPantunDemo(parent){
@@ -5802,11 +5853,14 @@
             const ph=i*Math.PI;
             f.leftArm.rotation.z = 0.75 + Math.sin(t*2.2+ph)*0.65*pulse;
             f.rightArm.rotation.z = -0.75 - Math.sin(t*2.2+ph)*0.65*pulse;
+            f.leftArm.rotation.x = Math.cos(t*1.1+ph)*0.18*pulse;
+            f.rightArm.rotation.x = -Math.cos(t*1.1+ph)*0.18*pulse;
             f.leftLeg.rotation.x = Math.sin(t*2.2+ph)*0.28*pulse;
             f.rightLeg.rotation.x = -Math.sin(t*2.2+ph)*0.28*pulse;
             f.group.position.y = Math.abs(Math.sin(t*2.2+ph))*0.06*pulse;
-            f.group.rotation.y += 0.0025*pulse*(i? -1:1);
+            f.group.rotation.y = (i?-0.10:0.10) + Math.sin(t*0.75+ph)*0.16*pulse;
           });
+          d.crescent.rotation.z = 0.50 + Math.sin(t*0.45)*0.06;
         } else if (st.def.key === 'silat' && st.performer.userData.demo){
           const d=st.performer.userData.demo, strike=(Math.sin(t*2.0)+1)/2, pulse=0.3+0.7*st.active;
           d.a.rightArm.rotation.x = -0.3 - strike*1.45*pulse;
@@ -5821,11 +5875,13 @@
           d.canting.position.x = -0.28 + p*0.56;
           d.canting.position.z = Math.sin(t*3.6)*0.16;
           d.canting.rotation.y = Math.sin(t*1.2)*0.18;
+          d.motifs.forEach((m,i)=>{ m.material.emissiveIntensity = 0.12 + 0.35*Math.max(0,Math.sin(t*1.6-i*0.38)); });
         } else if (st.def.key === 'makanan' && st.performer.userData.demo){
           const d=st.performer.userData.demo;
-          d.roller.rotation.z = Math.PI/2 + Math.sin(t*2.2)*0.28;
-          d.roller.position.x = Math.sin(t*1.5)*0.26;
-          d.balls.forEach((b,i)=>{ b.position.y=0.66+Math.sin(t*2.0+i)*0.018*(0.3+st.active); });
+          d.roller.rotation.z = Math.PI/2 + Math.sin(t*2.2)*0.22;
+          d.roller.position.x = -0.1 + Math.sin(t*1.5)*0.22;
+          d.dough.scale.x = 1 + 0.08*Math.sin(t*1.5);
+          d.balls.forEach((b,i)=>{ b.rotation.y += 0.001*(i%2?1:-1); });
           d.steam.forEach((p,i)=>{ p.position.y=0.82+((t*0.18+i*0.16)%0.65); p.material.opacity=0.22*(1-((t*0.18+i*0.16)%0.65)/0.65); });
         } else if (st.def.key === 'adat' && st.performer.userData.demo){
           st.performer.userData.demo.panels.forEach((p,i)=>{ p.position.y=0.65+Math.abs(i-1)*0.14+Math.sin(t*0.9+i)*0.05; });
