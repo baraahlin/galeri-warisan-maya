@@ -472,6 +472,12 @@
   let flameTexture = null;
   const kerisGrips = []; // filled by buildKerisControllers, also during init
 
+  // Story-first / Quest-friendly build: keep the magic in the 3D world.
+  // We retain one short opening clip, but the gallery itself now uses
+  // procedural 3D demonstrations instead of flat photo/video screens.
+  const IMMERSIVE_WORLD_FIRST = true;
+  const PERFORMANCE_LITE = true;
+
   init();
 
   function init(){
@@ -484,7 +490,7 @@
     // 60-90 m now show as silhouettes instead of vanishing entirely
     scene.fog = new THREE.FogExp2(0xead9b8, 0.016);
 
-    camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.05, 130);
+    camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.05, PERFORMANCE_LITE ? 90 : 130);
     camera.position.set(0, 1.6, 0);
 
     player = new THREE.Group();
@@ -495,10 +501,10 @@
     // phone GPUs are far more sensitive to antialiasing and high pixel
     // ratios than desktop -- both are common causes of laggy animation
     // on mobile, so trade a bit of visual crispness for frame rate there
-    renderer = new THREE.WebGLRenderer({ antialias: !isTouchDevice });
+    renderer = new THREE.WebGLRenderer({ antialias: !isTouchDevice, powerPreference:'high-performance' });
     // 1.5 everywhere: 2.0 on a hi-dpi desktop monitor meant pushing ~4x the
     // pixels of 1.0 through a full scene + shadow pass, the main desktop lag
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, PERFORMANCE_LITE ? 1.25 : 1.5));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputEncoding = THREE.sRGBEncoding;
     // filmic tone mapping compresses highlights the way a camera does --
@@ -528,6 +534,7 @@
     scatterVegetation();
     const stations = buildStations();
     stationsRef = stations;
+    buildStoryTrail(stations);
     const hotspots = buildArchitectureHotspots();
     const allPoints = stations.concat(hotspots);
     buildDescStands(allPoints);
@@ -615,6 +622,11 @@
     filmListener = listener;
 
     function startFilmPhase(){
+      // The old still-image short film duplicated what visitors are about
+      // to experience in VR and front-loaded several large images/audio
+      // files. In immersive mode we hand straight from the short opening
+      // clip into the living 3D gallery.
+      if (IMMERSIVE_WORLD_FIRST){ finishIntro(); return; }
       if (introScreen.style.display === 'none' || filmState) return; // not showing, or film already rolling
       video.pause();
       video.style.display = 'none';
@@ -762,6 +774,7 @@
   // event, which is not a user gesture), and the stills preload while the
   // intro video is still running
   function primeFilm(){
+    if (IMMERSIVE_WORLD_FIRST) return;
     const fa = ensureFilmAudio();
     [fa.music, fa.voice].forEach(a => {
       a.muted = true;
@@ -1810,10 +1823,10 @@
         const dx = t.clientX - lastTouchX, dy = t.clientY - lastTouchY;
         lastTouchX = t.clientX; lastTouchY = t.clientY;
         if (gyroActive){
-          gyroYawOffset -= dx*0.004; gyroPitchOffset -= dy*0.004;
+          gyroYawOffset -= dx*0.0032; gyroPitchOffset -= dy*0.0032;
           gyroPitchOffset = Math.max(-1.3, Math.min(1.3, gyroPitchOffset));
         } else {
-          yaw -= dx*0.004; pitch -= dy*0.004;
+          yaw -= dx*0.0032; pitch -= dy*0.0032;
           pitch = Math.max(-1.3, Math.min(1.3, pitch));
           player.rotation.y = yaw; camera.rotation.x = pitch;
         }
@@ -1826,13 +1839,23 @@
   }
 
   function joystickMove(dt){
-    if (Math.abs(joyState.x) < 0.05 && Math.abs(joyState.y) < 0.05) return;
     camera.getWorldDirection(tmp);
     tmp.y = 0; tmp.normalize();
-    const r = new THREE.Vector3(-tmp.z, 0, tmp.x);
-    const speed = 2.8*dt;
-    player.position.addScaledVector(tmp, -joyState.y*speed);
-    player.position.addScaledVector(r, joyState.x*speed);
+    right.set(-tmp.z, 0, tmp.x);
+
+    let x = joyState.x, y = joyState.y;
+    const mag = Math.min(1, Math.hypot(x,y));
+    moveWish.set(0,0,0);
+    if (mag > 0.10){
+      // radial deadzone + squared response: small thumb movements become
+      // careful walking, while pushing the stick fully still reaches speed.
+      const scaled = Math.pow((mag - 0.10) / 0.90, 1.65);
+      x /= mag; y /= mag;
+      moveWish.addScaledVector(tmp, -y).addScaledVector(right, x).normalize();
+      moveWish.multiplyScalar(MOVE_SPEED_MOBILE * scaled);
+    }
+    smoothVelocity(moveVelocity, moveWish, moveWish.lengthSq() ? MOVE_ACCEL : MOVE_DECEL, dt);
+    player.position.addScaledVector(moveVelocity, dt);
     clampToRoom();
   }
 
@@ -3296,7 +3319,7 @@
 
   function scatterVegetation(){
     const halfW = ROOM.width/2, halfD = ROOM.depth/2;
-    for (let i=0;i<18;i++){
+    for (let i=0;i<(PERFORMANCE_LITE ? 7 : 18);i++){
       const angle = Math.random()*Math.PI*2;
       const radius = Math.max(halfW,halfD) + 4 + Math.random()*20;
       const x = Math.cos(angle)*radius, z = Math.sin(angle)*radius;
@@ -3332,14 +3355,15 @@
     // east of the path opposite the rumah, oxen facing it
     buildKeretaLembu(13.2, 15, -Math.PI/2);
     buildSawahPadi();
-    buildImportedScenery();
-    // the horizon ring is the single biggest GPU upload spike in the whole
-    // load (three GLTFs, ~62MB of decoded texture between them, cloned to
-    // 21 copies) and nothing about it is visible in the first second --
-    // it's all past the walk clamp behind the guest's spawn-facing view.
-    // Pushing it a beat past the initial render lets everything else
-    // finish uploading first instead of all of it landing on the GPU at once.
-    setTimeout(buildHorizonDressing, 800);
+
+    // PERFORMANCE_LITE deliberately keeps the playable kampung compact.
+    // The procedural rumah, sawah, kereta lembu, balai and istana remain,
+    // but the multi-megabyte imported scenery and 21-piece mountain/forest
+    // horizon no longer load on the default Quest-friendly experience.
+    if (!PERFORMANCE_LITE){
+      buildImportedScenery();
+      setTimeout(buildHorizonDressing, 800);
+    }
   }
 
   // ---------- one bertingkat (stepped pyramidal roof) cluster: the real Istana
@@ -4183,14 +4207,16 @@
     const STAND_SPOTS = {
       // tarian, songket & batik and keris & anyaman stand on the LEFT of
       // their displays (as the guest faces them); the rest keep the right
-      tarian:    [-7.25, -5.45, -6,  -4.2],
-      alatmuzik: [ 7.25, -5.45,  6,  -4.2],
-      silat:     [ 1.25, -6.45,  0,  -5.2],
-      pakaian:   [-9.25, -0.45, -8,   0.8],
-      kraf:      [-9.25,  6.55, -8,   7.8],
-      makanan:   [ 9.25, -0.45,  8,   0.8],
-      adat:      [ 9.25,  6.55,  8,   7.8],
-      filem:     [ 2.35,  1.4,   0,   2.8],
+      // clockwise story path from the entrance: food -> textile -> craft
+      // -> music -> dance -> silat -> language/adat -> living legacy.
+      makanan:   [-7.10,  5.90, -6.0,  5.2],
+      pakaian:   [ 7.10,  4.70,  6.0,  4.0],
+      kraf:      [ 8.15,  0.80,  7.0,  0.0],
+      alatmuzik: [ 7.00, -3.50,  6.0, -4.0],
+      tarian:    [ 1.55, -5.70,  0.0, -6.4],
+      silat:     [-7.00, -3.50, -6.0, -4.0],
+      adat:      [-8.15,  0.80, -7.0,  0.0],
+      filem:     [ 1.60,  3.35,  0.0,  2.6],
       // tiang seri and tanggam placards flank the gateway out front on the
       // entrance path, FACING EACH OTHER across it like welcome boards --
       // a guest walking the path between them can read either side-on
@@ -4254,25 +4280,325 @@
     scene.add(s);
   }
 
-  // ---------- stations: the six branches of Warisan Melayu ----------
+  // ---------- story path + lightweight living demonstrations ----------
+  function buildStoryTrail(stations){
+    const route = ['makanan','pakaian','kraf','alatmuzik','tarian','silat','adat','filem'];
+    const ordered = route.map(k => stations.find(s => s.def.key === k)).filter(Boolean);
+    const mat = new THREE.MeshStandardMaterial({
+      color:0xc9a227, emissive:0x6f5310, emissiveIntensity:0.55,
+      roughness:0.55, metalness:0.2, transparent:true, opacity:0.62
+    });
+    for (let i=0;i<ordered.length;i++){
+      const p = ordered[i].group.position;
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.16,0.16,0.018,18), mat);
+      disc.position.set(p.x, 0.025, p.z + 1.45);
+      scene.add(disc);
+      if (i < ordered.length-1){
+        const a = new THREE.Vector3(p.x,0.018,p.z);
+        const b = new THREE.Vector3(ordered[i+1].group.position.x,0.018,ordered[i+1].group.position.z);
+        const d = a.distanceTo(b);
+        const steps = Math.max(2, Math.floor(d/0.85));
+        for(let j=1;j<steps;j++){
+          const q = a.clone().lerp(b,j/steps);
+          const pebble = new THREE.Mesh(new THREE.CylinderGeometry(0.075,0.075,0.012,14), mat);
+          pebble.position.copy(q);
+          scene.add(pebble);
+        }
+      }
+    }
+  }
+
+  function addBoxPart(parent, size, pos, mat){
+    const m = new THREE.Mesh(new THREE.BoxGeometry(size[0],size[1],size[2]),mat);
+    m.position.set(pos[0],pos[1],pos[2]); parent.add(m); return m;
+  }
+
+  function buildFigure(color, opts={}){
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({color,roughness:0.58,metalness:0.08});
+    const accent = new THREE.MeshStandardMaterial({color:opts.accent || 0xd6aa39,roughness:0.52,metalness:0.22});
+    const dark = new THREE.MeshStandardMaterial({color:0x17120d,roughness:0.72});
+    const skin = new THREE.MeshStandardMaterial({color:opts.skin || 0xc98f68,roughness:0.75});
+
+    // tapered torso reads more like clothing than the original blocky robot
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.24,0.62,10),mat);
+    torso.position.y=1.10; g.add(torso);
+    const samping = new THREE.Mesh(new THREE.CylinderGeometry(0.235,0.27,0.30,10),accent);
+    samping.position.y=0.82; g.add(samping);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.16,12,10),skin);
+    head.position.y=1.57; g.add(head);
+    if(opts.songkok){
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.14,0.13,10),dark);
+      cap.position.y=1.72; g.add(cap);
+    } else {
+      const headpiece = new THREE.Mesh(new THREE.TorusGeometry(0.13,0.025,6,14),accent);
+      headpiece.rotation.x=Math.PI/2; headpiece.position.y=1.69; g.add(headpiece);
+    }
+
+    const mkLimb=(x,y,len)=>{
+      const pivot=new THREE.Group(); pivot.position.set(x,y,0); g.add(pivot);
+      const limb=new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.055,len,8),mat);
+      limb.position.y=-len/2; pivot.add(limb); return pivot;
+    };
+    const leftArm=mkLimb(-0.22,1.34,0.56), rightArm=mkLimb(0.22,1.34,0.56);
+    const leftLeg=mkLimb(-0.10,0.72,0.66), rightLeg=mkLimb(0.10,0.72,0.66);
+    return {group:g,leftArm,rightArm,leftLeg,rightLeg,head};
+  }
+
+  function buildDanceDemo(parent){
+    const a=buildFigure(0x8f2f4d,{accent:0xe4b64b}), b=buildFigure(0x176b68,{accent:0xf0c75e});
+    a.group.position.x=-0.46; b.group.position.x=0.46;
+    a.group.rotation.y=-0.10; b.group.rotation.y=0.10;
+    parent.add(a.group,b.group);
+
+    // Wau-inspired crescent backdrop: a recognizable cultural silhouette
+    // behind the dancers without loading another model or texture.
+    const haloMat=new THREE.MeshStandardMaterial({color:0xd6aa39,emissive:0x7a5210,emissiveIntensity:0.35,roughness:0.45,side:THREE.DoubleSide});
+    const crescent=new THREE.Mesh(new THREE.TorusGeometry(0.78,0.055,8,36,Math.PI*1.35),haloMat);
+    crescent.position.set(0,1.05,-0.28); crescent.rotation.z=0.50; parent.add(crescent);
+    parent.userData.demo={type:'dance',a,b,crescent};
+  }
+
+  function buildSilatDemo(parent){
+    const a=buildFigure(0x191919,{accent:0x8f2639,songkok:true}), b=buildFigure(0x27364c,{accent:0xb58b32,songkok:true});
+    a.group.position.x=-0.56; b.group.position.x=0.56;
+    a.group.rotation.y=Math.PI/2; b.group.rotation.y=-Math.PI/2;
+    parent.add(a.group,b.group);
+
+    // low gelanggang boundary makes the exchange read as a performance space
+    const gelanggang=new THREE.Mesh(
+      new THREE.RingGeometry(0.72,0.78,32),
+      new THREE.MeshStandardMaterial({color:0xa1273d,emissive:0x53101e,emissiveIntensity:0.45,roughness:0.6,side:THREE.DoubleSide})
+    );
+    gelanggang.rotation.x=-Math.PI/2; gelanggang.position.y=-0.86; parent.add(gelanggang);
+    parent.userData.demo={type:'silat',a,b,gelanggang};
+  }
+
+  function buildTextileWorkshop(parent){
+    const wood=new THREE.MeshStandardMaterial({color:0x5a351e,roughness:0.8});
+    const gold=new THREE.MeshStandardMaterial({color:0xd6aa39,emissive:0x6d4a08,emissiveIntensity:0.25,roughness:0.48});
+    const indigo=new THREE.MeshStandardMaterial({color:0x243c72,roughness:0.72});
+    const wax=new THREE.MeshStandardMaterial({color:0xe6c45b,roughness:0.65});
+    const loom=new THREE.Group(); loom.position.x=-0.55; parent.add(loom);
+    [-0.48,0.48].forEach(x=>addBoxPart(loom,[0.08,1.35,0.08],[x,0.85,0],wood));
+    addBoxPart(loom,[1.04,0.08,0.08],[0,1.48,0],wood);
+    addBoxPart(loom,[1.04,0.08,0.08],[0,0.24,0],wood);
+    const cloth=addBoxPart(loom,[0.88,0.86,0.025],[0,0.86,0],indigo);
+    for(let y=-0.30;y<=0.30;y+=0.15) addBoxPart(cloth,[0.86,0.025,0.035],[0,y,0.02],gold);
+    // vertical warp threads + moving shuttle make the weaving action clear
+    for(let x=-0.38;x<=0.38;x+=0.095) addBoxPart(cloth,[0.012,0.82,0.032],[x,0,0.018],new THREE.MeshStandardMaterial({color:0xeadb9a,roughness:0.65}));
+    const shuttle=addBoxPart(loom,[0.28,0.06,0.10],[0,0.55,0.08],gold);
+
+    const batik=new THREE.Group(); batik.position.x=0.65; parent.add(batik);
+    addBoxPart(batik,[1.0,0.08,0.72],[0,0.55,0],wood);
+    addBoxPart(batik,[0.90,0.035,0.62],[0,0.61,0],new THREE.MeshStandardMaterial({color:0xe7d8a8,roughness:0.86}));
+    const motifs=[];
+    for(let i=0;i<10;i++){
+      const motif=new THREE.Mesh(new THREE.TorusGeometry(0.055,0.012,6,12),wax);
+      motif.rotation.x=Math.PI/2; motif.position.set(-0.34+(i%5)*0.17,0.635,-0.18+Math.floor(i/5)*0.28); batik.add(motif); motifs.push(motif);
+    }
+    const canting=new THREE.Group(); canting.position.set(0,0.82,0); batik.add(canting);
+    const handle=addBoxPart(canting,[0.07,0.32,0.07],[0,0.12,0],wood); handle.rotation.z=-0.55;
+    const cup=new THREE.Mesh(new THREE.SphereGeometry(0.07,10,8),gold); cup.position.set(0.09,0.0,0); canting.add(cup);
+    parent.userData.demo={type:'textile',shuttle,canting,motifs};
+  }
+
+  function buildKuihDemo(parent){
+    const wood=new THREE.MeshStandardMaterial({color:0x5a351e,roughness:0.82});
+    const leaf=new THREE.MeshStandardMaterial({color:0x315f36,roughness:0.9});
+    const trayMat=new THREE.MeshStandardMaterial({color:0xb88746,roughness:0.75});
+    const tray=new THREE.Mesh(new THREE.CylinderGeometry(0.78,0.78,0.07,24),trayMat);
+    tray.position.y=0.50; parent.add(tray);
+    const leafMat=new THREE.Mesh(new THREE.CylinderGeometry(0.70,0.70,0.018,24),leaf);
+    leafMat.position.y=0.545; parent.add(leafMat);
+
+    const balls=[];
+    // onde-onde cluster
+    for(let i=0;i<7;i++){
+      const m=new THREE.Mesh(new THREE.SphereGeometry(0.105,12,9),new THREE.MeshStandardMaterial({color:0x6ebf78,roughness:0.78}));
+      const a=i/7*Math.PI*2,r=i===0?0:0.26;
+      m.position.set(-0.20+Math.cos(a)*r*0.55,0.67,-0.06+Math.sin(a)*r*0.75); parent.add(m); balls.push(m);
+    }
+    // seri muka cubes, visibly layered
+    for(let i=0;i<3;i++){
+      const base=addBoxPart(parent,[0.22,0.09,0.22],[0.28+(i-1)*0.23,0.62,0.14],new THREE.MeshStandardMaterial({color:0xede2cf,roughness:0.8}));
+      const top=addBoxPart(parent,[0.22,0.075,0.22],[0.28+(i-1)*0.23,0.70,0.14],new THREE.MeshStandardMaterial({color:0x72a85a,roughness:0.75}));
+      balls.push(base,top);
+    }
+    // colourful kuih lapis stack
+    [0xe77d8a,0xf2d36b,0x9b73c8,0xf4eee1].forEach((c,i)=>{
+      const layer=addBoxPart(parent,[0.42,0.055,0.20],[0.18,0.60+i*0.055,-0.28],new THREE.MeshStandardMaterial({color:c,roughness:0.74}));
+      balls.push(layer);
+    });
+
+    const roller=new THREE.Group(); roller.position.set(-0.1,1.03,0); parent.add(roller);
+    const pin=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,0.72,14),wood); pin.rotation.z=Math.PI/2; roller.add(pin);
+    const dough=new THREE.Mesh(new THREE.CylinderGeometry(0.30,0.30,0.035,20),new THREE.MeshStandardMaterial({color:0xf0d9a6,roughness:0.86}));
+    dough.rotation.x=Math.PI/2; dough.position.set(-0.12,0.82,0); parent.add(dough);
+
+    const steam=[];
+    for(let i=0;i<5;i++){
+      const p=new THREE.Mesh(new THREE.SphereGeometry(0.07,8,6),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.20,depthWrite:false}));
+      p.position.set(-0.32+i*0.16,0.80+(i%2)*0.1,0.02); parent.add(p); steam.push(p);
+    }
+    parent.userData.demo={type:'food',roller,balls,steam,dough};
+  }
+
+  function buildPantunDemo(parent){
+    const cards=[
+      ['PANTUN','Pisang emas dibawa belayar'],
+      ['BUDI','Masak sebiji di atas peti'],
+      ['WARISAN','Budi yang baik dikenang juga']
+    ];
+    const panels=[];
+    cards.forEach((c,i)=>{
+      const p=makeLabel(c[0],c[1],true);
+      p.position.set((i-1)*0.72,0.65+Math.abs(i-1)*0.14,0);
+      p.scale.setScalar(0.58); parent.add(p); panels.push(p);
+    });
+    parent.userData.demo={type:'pantun',panels};
+  }
+
+  function buildLegacyDemo(parent){
+    const colours=[0xc9622a,0xb5892f,0x8a8f99,0x2a9d8f,0xd4a017,0xa1273d,0x6a4fae];
+    const rings=[];
+    colours.forEach((c,i)=>{
+      const ring=new THREE.Mesh(new THREE.TorusGeometry(0.34+i*0.055,0.025,8,30),
+        new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.75,roughness:0.3}));
+      ring.rotation.set(Math.PI/2,(i%3)*0.55,i*0.38); ring.position.y=0.85; parent.add(ring); rings.push(ring);
+    });
+    const core=new THREE.Mesh(new THREE.SphereGeometry(0.17,16,12),new THREE.MeshStandardMaterial({color:0xf2d98a,emissive:0xc9a227,emissiveIntensity:1.2,roughness:0.25}));
+    core.position.y=0.85; parent.add(core);
+    parent.userData.demo={type:'legacy',rings,core};
+  }
+
+  // ---------- scene dressing: each story beat occupies a little place,
+  // rather than sitting on the same museum pedestal. Everything is built
+  // from cheap primitives/materials so the atmosphere comes from composition,
+  // not more downloaded assets. ----------
+  function buildMiniEnvironment(def, group){
+    const wood = new THREE.MeshStandardMaterial({color:0x53331d,roughness:0.82});
+    const darkWood = new THREE.MeshStandardMaterial({color:0x2d1b11,roughness:0.88});
+    const rattan = new THREE.MeshStandardMaterial({color:0xb88948,roughness:0.9});
+    const brass = new THREE.MeshStandardMaterial({color:0xc9a227,metalness:0.45,roughness:0.42});
+    const cream = new THREE.MeshStandardMaterial({color:0xe7d8b4,roughness:0.92});
+    const leaf = new THREE.MeshStandardMaterial({color:0x315b36,roughness:0.9});
+    const clothRed = new THREE.MeshStandardMaterial({color:0x7f2438,roughness:0.78,side:THREE.DoubleSide});
+    const clothBlue = new THREE.MeshStandardMaterial({color:0x233e64,roughness:0.78,side:THREE.DoubleSide});
+
+    // A thin woven mat replaces the old chunky plinth and visually anchors
+    // each scene while still allowing visitors to walk right up to it.
+    const matGeo = new THREE.CylinderGeometry(1.30,1.30,0.028,32);
+    const mat = new THREE.Mesh(matGeo, new THREE.MeshStandardMaterial({
+      color:def.key==='silat'?0x8b6b42:0x9f7a46, roughness:0.96
+    }));
+    mat.position.y=0.018; group.add(mat);
+
+    if(def.key==='makanan'){
+      // Dapur corner: low prep table, clay stove, pot, banana-leaf basket.
+      addBoxPart(group,[1.45,0.10,0.72],[0,0.50,-0.20],wood);
+      [-0.58,0.58].forEach(x=>[-0.22,0.22].forEach(z=>addBoxPart(group,[0.08,0.48,0.08],[x,0.25,z-0.20],darkWood)));
+      const stove=new THREE.Mesh(new THREE.CylinderGeometry(0.34,0.40,0.36,16),new THREE.MeshStandardMaterial({color:0x7f4b34,roughness:0.95}));
+      stove.position.set(-0.78,0.20,0.48); group.add(stove);
+      const pot=new THREE.Mesh(new THREE.CylinderGeometry(0.27,0.32,0.22,16),new THREE.MeshStandardMaterial({color:0x332d28,metalness:0.18,roughness:0.7}));
+      pot.position.set(-0.78,0.48,0.48); group.add(pot);
+      const lid=new THREE.Mesh(new THREE.ConeGeometry(0.29,0.10,16),brass); lid.position.set(-0.78,0.64,0.48); group.add(lid);
+      const basket=new THREE.Mesh(new THREE.CylinderGeometry(0.26,0.31,0.18,16),rattan); basket.position.set(0.78,0.12,0.48); group.add(basket);
+      for(let i=0;i<4;i++){
+        const lf=new THREE.Mesh(new THREE.PlaneGeometry(0.28,0.55),leaf);
+        lf.rotation.x=-Math.PI/2; lf.rotation.z=(i-1.5)*0.22; lf.position.set(0.78+(i-1.5)*0.08,0.23,0.48); group.add(lf);
+      }
+    } else if(def.key==='pakaian'){
+      // Open textile workshop frame with hanging dyed cloth samples.
+      [-1.08,1.08].forEach(x=>addBoxPart(group,[0.09,2.05,0.09],[x,1.03,-0.52],wood));
+      addBoxPart(group,[2.25,0.10,0.10],[0,2.02,-0.52],wood);
+      [clothRed,clothBlue].forEach((m,i)=>{
+        const cloth=new THREE.Mesh(new THREE.PlaneGeometry(0.48,0.92),m);
+        cloth.position.set(i?0.72:-0.72,1.40,-0.49); group.add(cloth);
+      });
+      const dyePot=new THREE.Mesh(new THREE.CylinderGeometry(0.28,0.34,0.34,16),new THREE.MeshStandardMaterial({color:0x493128,roughness:0.9}));
+      dyePot.position.set(0.82,0.20,0.55); group.add(dyePot);
+    } else if(def.key==='kraf'){
+      // Craftsman's corner: horizontal workbench + anyaman tray, not a display case.
+      addBoxPart(group,[1.65,0.10,0.62],[0,0.58,-0.18],wood);
+      [-0.65,0.65].forEach(x=>addBoxPart(group,[0.10,0.56,0.10],[x,0.29,-0.18],darkWood));
+      const anyaman=buildAnyaman(); anyaman.scale.setScalar(0.80); anyaman.position.set(0.55,0.67,-0.15); group.add(anyaman);
+      const toolRack=addBoxPart(group,[1.45,0.75,0.05],[0,1.35,-0.78],darkWood);
+      for(let i=0;i<5;i++) addBoxPart(toolRack,[0.035,0.42,0.035],[-0.48+i*0.24,0,0.04],brass).rotation.z=(i-2)*0.12;
+    } else if(def.key==='alatmuzik'){
+      // Performance rug + low instrument rail suggests musicians gathering together.
+      const rug=new THREE.Mesh(new THREE.CircleGeometry(1.08,28),new THREE.MeshStandardMaterial({color:0x6f2131,roughness:0.9}));
+      rug.rotation.x=-Math.PI/2; rug.position.y=0.038; group.add(rug);
+      addBoxPart(group,[1.85,0.16,0.18],[0,0.12,-0.76],darkWood);
+      for(let i=-3;i<=3;i++){
+        const gong=new THREE.Mesh(new THREE.TorusGeometry(0.09+Math.abs(i)*0.008,0.022,6,16),brass);
+        gong.position.set(i*0.24,0.50,-0.75); group.add(gong);
+      }
+    } else if(def.key==='tarian'){
+      // A small panggung: broad timber deck, corner lanterns, open back.
+      addBoxPart(group,[2.35,0.09,1.70],[0,0.07,0],wood);
+      [[-1.00,-0.68],[1.00,-0.68]].forEach(([x,z])=>{
+        addBoxPart(group,[0.07,1.75,0.07],[x,0.90,z],darkWood);
+        const lamp=new THREE.Mesh(new THREE.SphereGeometry(0.10,10,8),new THREE.MeshBasicMaterial({color:0xffd98a}));
+        lamp.position.set(x,1.67,z); group.add(lamp);
+      });
+      addBoxPart(group,[2.15,0.06,0.06],[0,1.75,-0.68],darkWood);
+    } else if(def.key==='silat'){
+      // Proper gelanggang: square woven floor, four boundary posts and rope.
+      const floor=new THREE.Mesh(new THREE.PlaneGeometry(2.35,2.15),cream);
+      floor.rotation.x=-Math.PI/2; floor.position.y=0.04; group.add(floor);
+      const corners=[[-1.02,-0.90],[1.02,-0.90],[-1.02,0.90],[1.02,0.90]];
+      corners.forEach(([x,z])=>addBoxPart(group,[0.07,0.62,0.07],[x,0.32,z],darkWood));
+      [[-1.02,-0.90,1.02,-0.90],[-1.02,0.90,1.02,0.90],[-1.02,-0.90,-1.02,0.90],[1.02,-0.90,1.02,0.90]].forEach(([x1,z1,x2,z2])=>{
+        const len=Math.hypot(x2-x1,z2-z1), rope=addBoxPart(group,[len,0.025,0.025],[(x1+x2)/2,0.48,(z1+z2)/2],new THREE.MeshStandardMaterial({color:0xb58b32,roughness:0.8}));
+        rope.rotation.y=-Math.atan2(z2-z1,x2-x1);
+      });
+    } else if(def.key==='adat'){
+      // Literary corner: low bench and a carved arch around the floating pantun.
+      addBoxPart(group,[1.65,0.12,0.44],[0,0.34,0.50],wood);
+      [-0.62,0.62].forEach(x=>addBoxPart(group,[0.09,0.30,0.09],[x,0.16,0.50],darkWood));
+      [-1.0,1.0].forEach(x=>addBoxPart(group,[0.08,1.75,0.08],[x,0.88,-0.52],wood));
+      addBoxPart(group,[2.08,0.08,0.08],[0,1.75,-0.52],wood);
+      for(let i=0;i<5;i++){
+        const deco=new THREE.Mesh(new THREE.TorusGeometry(0.09,0.018,6,14,Math.PI),brass);
+        deco.position.set(-0.72+i*0.36,1.69,-0.48); deco.rotation.z=Math.PI; group.add(deco);
+      }
+    } else if(def.key==='filem'){
+      // Finale stays deliberately open: a circular meeting place with seven
+      // coloured inlays feeding the central "living legacy" sculpture.
+      const cols=[0xc9622a,0xb5892f,0x8a8f99,0x2a9d8f,0xd4a017,0xa1273d,0x6a4fae];
+      cols.forEach((c,i)=>{
+        const a=i/cols.length*Math.PI*2;
+        const tile=new THREE.Mesh(new THREE.BoxGeometry(0.46,0.025,0.18),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:0.20,roughness:0.65}));
+        tile.position.set(Math.cos(a)*0.88,0.05,Math.sin(a)*0.88); tile.rotation.y=-a; group.add(tile);
+      });
+    }
+  }
+
+  // ---------- stations: the living branches of Warisan Melayu ----------
   function buildStations(){
     const defs = [
-      { key:'tarian', name:'TARIAN', sub:'Tarian Wau Bulan & Ayam Didik — Pelajar UniMAP', color:0xd4a017, pos:[-6,0,-7], freq:220, wave:'sine', alwaysPlayVideo:true,
-        desc:'Wau Bulan, the moon kite, is a giant traditional kite from Kelantan, its crescent-shaped tail cut from paper or cloth stretched over a bamboo frame, traditionally flown after the padi harvest to mark the end of the planting season -- competitions judged a kite\'s height, steadiness in the wind and the deep hum of its gangga (drone-string). Ayam Didik grew out of the playful footwork of melaga ayam (traditional Malay cockfighting), created by a group of dancers in Kangar, Perlis and popular today across Perlis, Kedah, Penang and northern Perak; danced in pairs to the gong, gendang and biola of its namesake song, its strutting, courting movements were traditionally staged at harvest time and at weddings. Both remain proud symbols of Malay craftsmanship and custom, kept alive today through demonstrations such as these by UniMAP\'s own students.' },
-      { key:'alatmuzik', name:'ALAT MUZIK', sub:'Gamelan Instrument', color:0x2a9d8f, pos:[6,0,-7], audioSrc:'assets/audio/alat_muzik.mp3', audioTrimStart:5, audioTrimEnd:5,
-        desc:'The gamelan is a bronze-keyed percussion ensemble with deep roots in the royal courts of the Malay Archipelago, where sets were commissioned by sultans and kept as palace treasures. It accompanied royal ceremonies, wedding processions (persandingan) and court dances, its layered, ringing tones setting the pace for the performers around it.' },
-      { key:'silat', name:'SILAT', sub:'Seni Persembahan', color:0xa1273d, pos:[0,0,-8], freq:110, wave:'sawtooth',
-        desc:'Silat Melayu is a traditional martial art combining self-defence with spiritual discipline (adab) passed down from teacher to student (guru-anak murid). Beyond combat training, it is performed ceremonially at weddings and cultural festivals, and historically formed part of a warrior\'s preparation alongside the keris.' },
-      { key:'pakaian', name:'SONGKET & BATIK', sub:'Pakaian & Tekstil', color:0xb5892f, pos:[-8,0,-2], silent:true,
-        desc:'Songket is a hand-woven brocade with gold or silver thread worked into the fabric on a supplementary weft, historically reserved for royalty and worn at weddings and formal ceremonies for its shimmer and status. Batik, made by wax-resist dyeing, was worn more broadly across daily and festive life throughout the Malay Archipelago.' },
-      { key:'kraf', name:'KERIS & ANYAMAN', sub:'Kraf Tangan & Persenjataan', color:0x8a8f99, pos:[-8,0,5], silent:true,
-        desc:'The keris is a wavy-bladed dagger carried as part of formal Malay attire (baju Melayu) and regarded as a symbol of status and spiritual power, often passed down as a family heirloom. Anyaman is the everyday craft of weaving pandan, rattan and bamboo into mats, baskets and trays -- humble household items woven by hand in nearly every kampung.' },
-      { key:'makanan', name:'HIDANGAN WARISAN', sub:'Makanan Warisan', color:0xc9622a, pos:[8,0,-2], silent:true,
-        desc:'Malay heritage dishes such as rendang, nasi lemak and an array of kuih-muih reflect centuries of spice trade with India, China and the Middle East, absorbed into local ingredients and cooking methods. They are served at kenduri (feasts), weddings and Hari Raya celebrations, where cooking and sharing food is itself a communal, festive act.' },
-      { key:'adat', name:'PANTUN & ADAT', sub:'Adat Resam & Kesusasteraan', color:0x6a4fae, pos:[8,0,5], freq:174, wave:'triangle',
-        desc:'Pantun is a traditional oral poetry form built from rhyming quatrains, historically used in courtship, ceremonies and everyday social exchange to convey wit and wisdom indirectly. Adat resam refers to the customary practices and unwritten laws -- such as adat perpatih and adat temenggong -- that have long governed Malay social conduct, ceremonies and inheritance.' },
-      { key:'filem', name:'FILEM MELAYU', sub:'Zaman Kesultanan Melayu', color:0xc9a227, pos:[0,0,0], silent:true, labelY:2.9,
-        desc:'Three Malay films set in the Melaka Sultanate era, arranged left to right in order of release so the story of that world unfolds across the decades: Hang Tuah (1956, dir. Phani Majumdar), Puteri Gunung Ledang (1961, dir. S. Roomai Noor), and Puteri Gunung Ledang (2004, dir. Saw Teong Hin).' },
+      // The layout is deliberately sequential rather than symmetrical. A
+      // visitor entering from +Z meets ordinary life first, then follows
+      // the craft/sound/movement arc around the balai to a central legacy
+      // finale. This gives the gallery a beginning, build-up and ending.
+      { key:'makanan', name:'1 · DAPUR & KUIH', sub:'Warisan bermula dalam kehidupan harian', color:0xc9622a, pos:[-6,0,5.2], silent:true,
+        desc:'Malay heritage dishes such as rendang, nasi lemak and kuih-muih preserve knowledge through repeated hands-on practice. In the living display, dough is shaped, rolled and arranged rather than shown as a flat poster: food heritage is an action shared across generations.' },
+      { key:'pakaian', name:'2 · SONGKET & BATIK', sub:'Daripada tangan menjadi corak', color:0xb5892f, pos:[6,0,4.0], silent:true,
+        desc:'Songket is hand-woven with supplementary gold or silver threads, while batik is built through wax-resist drawing and dye. This station demonstrates the shuttle crossing a loom and a canting tracing motifs so visitors see the making process, not a video of it.' },
+      { key:'kraf', name:'3 · KERIS & KRAF', sub:'Bentuk, fungsi dan identiti', color:0x8a8f99, pos:[7,0,0], silent:true,
+        desc:'The keris combines metallurgy, carving, dress and symbolism in one object. It is presented here as a true 3D artefact beside another crafted form, keeping the visitor inside the virtual world rather than sending attention to a screen.' },
+      { key:'alatmuzik', name:'4 · ALAT MUZIK', sub:'Bunyi menggerakkan ruang', color:0x2a9d8f, pos:[6,0,-4], audioSrc:'assets/audio/alat_muzik.mp3', audioTrimStart:5, audioTrimEnd:5,
+        desc:'The gamelan is a bronze-keyed percussion ensemble with deep roots in the royal courts of the Malay Archipelago. Its layered rhythm becomes the bridge from material craft into performance: first we make, then we sound, then we move.' },
+      { key:'tarian', name:'5 · TARIAN', sub:'Gerak hidup — bukan skrin', color:0xd4a017, pos:[0,0,-6.4], silent:true,
+        desc:'Traditional dance turns rhythm into visible cultural memory. Instead of playing a recorded clip, two lightweight articulated figures demonstrate coordinated sway, steps and arm gestures in real time so the exhibit remains spatial and native to VR.' },
+      { key:'silat', name:'6 · SILAT', sub:'Disiplin, tindak balas dan adab', color:0xa1273d, pos:[-6,0,-4], silent:true,
+        desc:'Silat combines self-defence, discipline and adab. The two figures here exchange a looping attack-and-block sequence to make the relationship between action, timing and restraint readable without a flat video panel.' },
+      { key:'adat', name:'7 · PANTUN & ADAT', sub:'Gerak menjadi kata dan nilai', color:0x6a4fae, pos:[-7,0,0], silent:true,
+        desc:'Pantun carries wit, memory and social values through compact rhyming verses, while adat shapes how people act together. Floating in-world verse panels make language part of the space itself instead of another screen to watch.' },
+      { key:'filem', name:'8 · LEGASI HIDUP', sub:'Warisan diteruskan oleh generasi seterusnya', color:0xc9a227, pos:[0,0,2.6], silent:true, labelY:2.9,
+        desc:'The route ends where it began: with people. Food, textile, craft, music, dance, silat and language survive because each generation performs, adapts and passes them forward. The final light sculpture gathers the colours of the journey into one living legacy.' },
     ];
     return defs.map(buildStation);
   }
@@ -4730,35 +5056,33 @@
     group.position.set(def.pos[0], 0, def.pos[2]);
     scene.add(group);
 
-    // base pedestal
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.9, 1.05, 0.4, 24),
-      new THREE.MeshStandardMaterial({ color: 0x1a1206, roughness:0.6, metalness:0.3 })
-    );
-    base.position.y = 0.2;
-    group.add(base);
-    addCircleCollider(def.pos[0], def.pos[2], 1.0);
+    // Build a grounded mini-environment instead of putting every subject
+    // on the same museum pedestal. The visitor can approach the scene edge
+    // naturally; collision belongs to actual furniture/buildings instead.
+    buildMiniEnvironment(def, group);
 
-    // glowing ring (proximity indicator)
+    // A faint floor ring remains purely as proximity feedback, not a plinth.
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(1.15, 0.04, 12, 48),
-      new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: 0.15, roughness:0.4 })
+      new THREE.TorusGeometry(1.30, 0.025, 8, 40),
+      new THREE.MeshBasicMaterial({ color:def.color, transparent:true, opacity:0.18, depthWrite:false })
     );
     ring.rotation.x = Math.PI/2;
-    ring.position.y = 0.02;
+    ring.position.y = 0.055;
     group.add(ring);
+    const aura = null;
 
-    // abstract "performer" sculpture, unique per art form
     const performer = new THREE.Group();
-    performer.position.y = 0.9;
+    const performerHeights = {
+      makanan:0.02, pakaian:0.02, kraf:0.64, alatmuzik:0.60,
+      tarian:0.02, silat:0.02, adat:0.50, filem:0.05
+    };
+    performer.position.y = performerHeights[def.key] != null ? performerHeights[def.key] : 0.05;
     group.add(performer);
 
     const partsMat = new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: 0.25, roughness:0.35, metalness:0.4 });
 
     if (def.key === 'tarian'){
-      // wau bulan plays first, then ayam didik, then loops back -- see the
-      // playlist branch in buildVideoPosterCard
-      buildVideoPosterCard(performer, def, ['assets/videos/tarian_wau_bulan.mp4', 'assets/videos/tarian_ayam_didik.mp4']);
+      buildDanceDemo(performer);
     } else if (def.key === 'alatmuzik'){
       const gamelan = buildGamelanPlayer();
       performer.add(gamelan);
@@ -4766,32 +5090,9 @@
       performer.userData.malletPivot = gamelan.userData.malletPivot;
       performer.userData.malletBaseY = gamelan.userData.malletBaseY;
     } else if (def.key === 'silat'){
-      buildVideoPosterCard(performer, def, 'assets/videos/silat_clip.mp4');
+      buildSilatDemo(performer);
     } else if (def.key === 'pakaian'){
-      // two real process clips side by side, shrunk from the gold
-      // picture-frame's single-card size to fit -- both stay muted, silent
-      // visual-only loops (see ensureStationAudio's 'pakaian' skip), so
-      // anak ayam is the only audio heard at this station
-      const songketGroup = new THREE.Group();
-      songketGroup.position.set(-0.6, 0.315, 0);
-      songketGroup.scale.setScalar(0.55);
-      performer.add(songketGroup);
-      buildVideoPosterCard(songketGroup, def, 'assets/videos/songket_clip.mp4');
-      const songketSwatch = buildFabricSwatch('assets/images/songket_pattern.jpg');
-      songketSwatch.position.set(0, -0.55, 0.05);
-      songketGroup.add(songketSwatch);
-
-      const batikGroup = new THREE.Group();
-      batikGroup.position.set(0.6, 0.315, 0);
-      batikGroup.scale.setScalar(0.55);
-      performer.add(batikGroup);
-      buildVideoPosterCard(batikGroup, def, 'assets/videos/batik_clip.mp4');
-      const batikSwatch = buildFabricSwatch('assets/images/batik_pattern.jpg');
-      batikSwatch.position.set(0, -0.55, 0.05);
-      batikGroup.add(batikSwatch);
-
-      performer.userData.videoEl = songketGroup.userData.videoEl;
-      performer.userData.videoEl2 = batikGroup.userData.videoEl;
+      buildTextileWorkshop(performer);
     } else if (def.key === 'kraf'){
       const keris = buildKerisPhoto();
       keris.position.set(-0.3, 0.05, 0);
@@ -4844,18 +5145,11 @@
       // (the procedural anyaman tray is retired -- this station now shows
       // imported 3D models only: the keris and the framed wau bulan)
     } else if (def.key === 'makanan'){
-      // the kuih-muih poster in the same gold frame as the filem cards,
-      // replacing the old procedural tray of abstract dishes
-      const card = buildFilemCard('assets/images/poster_kuih.png');
-      card.group.position.set(0, 0.7, 0);
-      performer.add(card.group);
+      buildKuihDemo(performer);
     } else if (def.key === 'adat'){
-      // 0.57s crops a dead intro cut off the front of the clip
-      buildVideoPosterCard(performer, def, 'assets/videos/pantun_budi.mp4', 0.57);
+      buildPantunDemo(performer);
     } else if (def.key === 'filem'){
-      const cinema = buildFilemMelayu();
-      performer.add(cinema);
-      performer.userData.filemCards = cinema.userData.cards;
+      buildLegacyDemo(performer);
     }
 
     const label = makeLabel(def.name, def.sub, true);
@@ -4863,7 +5157,7 @@
     group.add(label);
 
     return {
-      def, group, ring, performer, label,
+      def, group, ring, aura, performer, label,
       active: 0, // 0..1 smoothed activation
       worldPos: new THREE.Vector3()
     };
@@ -4928,23 +5222,47 @@
   // ---------- input ----------
   function onMouseMove(e){
     if (document.pointerLockElement !== renderer.domElement) return;
-    yaw   -= e.movementX * 0.0025;
-    pitch -= e.movementY * 0.0025;
+    yaw   -= e.movementX * 0.00185;
+    pitch -= e.movementY * 0.00185;
     pitch = Math.max(-1.3, Math.min(1.3, pitch));
     player.rotation.y = yaw;
     camera.rotation.x = pitch;
   }
 
   const fwd = new THREE.Vector3(), right = new THREE.Vector3(), tmp = new THREE.Vector3();
+  const moveWish = new THREE.Vector3();
+  const moveVelocity = new THREE.Vector3();
+  const vrMoveVelocity = new THREE.Vector3();
+  const MOVE_SPEED_DESKTOP = 2.35;
+  const MOVE_SPEED_MOBILE = 2.05;
+  const MOVE_SPEED_VR = 1.85;
+  const MOVE_ACCEL = 9.5;
+  const MOVE_DECEL = 12.0;
+
+  function smoothVelocity(current, desired, accel, dt){
+    const a = 1 - Math.exp(-accel * dt);
+    current.lerp(desired, a);
+    if (desired.lengthSq() < 0.0001 && current.lengthSq() < 0.0008) current.set(0,0,0);
+  }
+
   function desktopMove(dt){
     if (renderer.xr.isPresenting || gyroActive) return;
     fwd.set(Math.sin(yaw), 0, Math.cos(yaw)).multiplyScalar(-1);
     right.set(-fwd.z, 0, fwd.x);
-    const speed = 3.2 * dt;
-    if (keys['KeyW']||keys['ArrowUp'])    player.position.addScaledVector(fwd, speed);
-    if (keys['KeyS']||keys['ArrowDown'])  player.position.addScaledVector(fwd, -speed);
-    if (keys['KeyA']||keys['ArrowLeft'])  player.position.addScaledVector(right, -speed);
-    if (keys['KeyD']||keys['ArrowRight']) player.position.addScaledVector(right, speed);
+    let ix = 0, iz = 0;
+    if (keys['KeyW']||keys['ArrowUp']) iz += 1;
+    if (keys['KeyS']||keys['ArrowDown']) iz -= 1;
+    if (keys['KeyD']||keys['ArrowRight']) ix += 1;
+    if (keys['KeyA']||keys['ArrowLeft']) ix -= 1;
+
+    moveWish.set(0,0,0);
+    if (ix || iz){
+      moveWish.addScaledVector(fwd, iz).addScaledVector(right, ix);
+      if (moveWish.lengthSq() > 1) moveWish.normalize();
+      moveWish.multiplyScalar(MOVE_SPEED_DESKTOP);
+    }
+    smoothVelocity(moveVelocity, moveWish, moveWish.lengthSq() ? MOVE_ACCEL : MOVE_DECEL, dt);
+    player.position.addScaledVector(moveVelocity, dt);
     clampToRoom();
   }
 
@@ -4967,6 +5285,8 @@
   }
 
   let vrExitBtnWas = false; // X held last frame -- makes the exit edge-triggered
+  let vrSnapReady = true;
+  const VR_SNAP_ANGLE = THREE.MathUtils.degToRad(30);
   function vrMove(dt){
     if (!renderer.xr.isPresenting) return;
     const session = renderer.xr.getSession();
@@ -4999,19 +5319,29 @@
       const ax = axes.length >= 4 ? axes[2] : axes[0];
       const ay = axes.length >= 4 ? axes[3] : axes[1];
       if (src.handedness === 'right'){
-        // right stick steers the view like the phone gyro/drag look:
-        // horizontal = smooth yaw turn (pitch stays on the headset)
-        if (Math.abs(ax) > 0.15) vrTurn(-ax * 2.0 * dt);
+        // Comfort-first turning: one 30° step per deliberate stick push.
+        // The stick must return near centre before another turn can fire.
+        if (Math.abs(ax) < 0.35) vrSnapReady = true;
+        if (vrSnapReady && Math.abs(ax) > 0.72){
+          vrTurn(ax > 0 ? -VR_SNAP_ANGLE : VR_SNAP_ANGLE);
+          vrSnapReady = false;
+        }
         continue;
       }
-      if (Math.abs(ax) < 0.12 && Math.abs(ay) < 0.12) continue;
+
       camera.getWorldDirection(tmp);
       tmp.y = 0; tmp.normalize();
-      const r = new THREE.Vector3(-tmp.z, 0, tmp.x);
-      const speed = 2.6 * dt;
-      player.position.addScaledVector(tmp, -ay * speed);
-      player.position.addScaledVector(r, ax * speed);
+      right.set(-tmp.z, 0, tmp.x);
+      const mag = Math.min(1, Math.hypot(ax,ay));
+      moveWish.set(0,0,0);
+      if (mag > 0.16){
+        const scaled = Math.pow((mag - 0.16) / 0.84, 1.45);
+        moveWish.addScaledVector(tmp, -ay/mag).addScaledVector(right, ax/mag).normalize();
+        moveWish.multiplyScalar(MOVE_SPEED_VR * scaled);
+      }
     }
+    smoothVelocity(vrMoveVelocity, moveWish, moveWish.lengthSq() ? 7.0 : 11.0, dt);
+    player.position.addScaledVector(vrMoveVelocity, dt);
     clampToRoom();
   }
 
@@ -5499,14 +5829,11 @@
       if (!renderer.xr.isPresenting) joystickMove(dt);
       if (gyroActive && !renderer.xr.isPresenting) applyGyroToCamera();
 
-      // walking head-bob plus a faint idle breathing sway -- scaled by actual
-      // player speed, and never applied in VR where the headset owns the head
+      // Keep the viewpoint stable. Strong artificial head-bob made the
+      // gallery feel game-like and can be uncomfortable on mobile. A tiny
+      // breathing drift is enough to avoid a completely frozen camera.
       if (!renderer.xr.isPresenting){
-        const moved = tmp.subVectors(player.position, prevPlayerPos).length();
-        const speedNow = moved / Math.max(dt, 0.0001);
-        bobPhase += Math.min(speedNow, 4) * dt * 3.4;
-        const bobAmp = THREE.MathUtils.clamp(speedNow/3.2, 0, 1) * 0.028;
-        camera.position.y = 1.6 + Math.sin(bobPhase*2)*bobAmp + Math.sin(t*1.6)*0.006;
+        camera.position.y = 1.6 + Math.sin(t*1.35)*0.0025;
       }
 
       // guest hosting a spectator session: broadcast the camera pose
@@ -5628,8 +5955,8 @@
 
       // glow (ring for stations, marker for architecture hotspots)
       if (st.ring){
-        st.ring.material.emissiveIntensity = 0.15 + st.active * 1.4;
-        st.ring.scale.setScalar(1 + st.active*0.08 + Math.sin(t*2)*0.01);
+        st.ring.material.opacity = 0.10 + st.active * 0.42;
+        st.ring.scale.setScalar(1 + st.active*0.055 + Math.sin(t*2)*0.006);
       }
       if (st.marker){
         st.marker.material.emissiveIntensity = 0.3 + st.active * 1.3;
@@ -5654,9 +5981,51 @@
             st.performer.userData.malletPivot.position.y = st.performer.userData.malletBaseY - dip;
           }
           st.performer.rotation.y = Math.sin(t*0.5)*0.12;
+        } else if (st.def.key === 'tarian' && st.performer.userData.demo){
+          const d=st.performer.userData.demo, pulse=0.35+0.65*st.active;
+          [d.a,d.b].forEach((f,i)=>{
+            const ph=i*Math.PI;
+            f.leftArm.rotation.z = 0.75 + Math.sin(t*2.2+ph)*0.65*pulse;
+            f.rightArm.rotation.z = -0.75 - Math.sin(t*2.2+ph)*0.65*pulse;
+            f.leftArm.rotation.x = Math.cos(t*1.1+ph)*0.18*pulse;
+            f.rightArm.rotation.x = -Math.cos(t*1.1+ph)*0.18*pulse;
+            f.leftLeg.rotation.x = Math.sin(t*2.2+ph)*0.28*pulse;
+            f.rightLeg.rotation.x = -Math.sin(t*2.2+ph)*0.28*pulse;
+            f.group.position.y = Math.abs(Math.sin(t*2.2+ph))*0.06*pulse;
+            f.group.rotation.y = (i?-0.10:0.10) + Math.sin(t*0.75+ph)*0.16*pulse;
+          });
+          d.crescent.rotation.z = 0.50 + Math.sin(t*0.45)*0.06;
+        } else if (st.def.key === 'silat' && st.performer.userData.demo){
+          const d=st.performer.userData.demo, strike=(Math.sin(t*2.0)+1)/2, pulse=0.3+0.7*st.active;
+          d.a.rightArm.rotation.x = -0.3 - strike*1.45*pulse;
+          d.a.leftArm.rotation.z = 0.65;
+          d.b.leftArm.rotation.x = -0.35 - (1-strike)*1.15*pulse;
+          d.b.rightArm.rotation.z = -0.75;
+          d.a.group.position.x = -0.52 + strike*0.08*pulse;
+          d.b.group.position.x = 0.52 - (1-strike)*0.08*pulse;
+        } else if (st.def.key === 'pakaian' && st.performer.userData.demo){
+          const d=st.performer.userData.demo, p=(Math.sin(t*1.8)+1)/2;
+          d.shuttle.position.x = -0.34 + p*0.68;
+          d.canting.position.x = -0.28 + p*0.56;
+          d.canting.position.z = Math.sin(t*3.6)*0.16;
+          d.canting.rotation.y = Math.sin(t*1.2)*0.18;
+          d.motifs.forEach((m,i)=>{ m.material.emissiveIntensity = 0.12 + 0.35*Math.max(0,Math.sin(t*1.6-i*0.38)); });
+        } else if (st.def.key === 'makanan' && st.performer.userData.demo){
+          const d=st.performer.userData.demo;
+          d.roller.rotation.z = Math.PI/2 + Math.sin(t*2.2)*0.22;
+          d.roller.position.x = -0.1 + Math.sin(t*1.5)*0.22;
+          d.dough.scale.x = 1 + 0.08*Math.sin(t*1.5);
+          d.balls.forEach((b,i)=>{ b.rotation.y += 0.001*(i%2?1:-1); });
+          d.steam.forEach((p,i)=>{ p.position.y=0.82+((t*0.18+i*0.16)%0.65); p.material.opacity=0.22*(1-((t*0.18+i*0.16)%0.65)/0.65); });
+        } else if (st.def.key === 'adat' && st.performer.userData.demo){
+          st.performer.userData.demo.panels.forEach((p,i)=>{ p.position.y=0.65+Math.abs(i-1)*0.14+Math.sin(t*0.9+i)*0.05; });
+        } else if (st.def.key === 'filem' && st.performer.userData.demo){
+          const d=st.performer.userData.demo;
+          d.rings.forEach((r,i)=>{ r.rotation.z += 0.003*(i%2?1:-1)*(0.5+st.active); r.rotation.y += 0.002*(i%3-1); });
+          d.core.scale.setScalar(1+0.08*Math.sin(t*2.5));
         } else if (st.def.key === 'kraf'){
-          st.performer.rotation.z = Math.sin(t*1.2)*0.08;
-          st.performer.rotation.y = t*0.3;
+          st.performer.rotation.z = Math.sin(t*1.2)*0.035;
+          st.performer.rotation.y = Math.sin(t*0.35)*0.12;
         }
       }
 
